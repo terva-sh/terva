@@ -68,6 +68,7 @@ The full feature-string vocabulary (declare only what you implement):
 | `edits_in` / `deletes_in` / `reactions_in` | inbound edit/delete/reaction streams | edits block |
 | `edits_out` / `reactions_out` / `deletes_out` | the outbound commands (+ `min_edit_interval_ms`) | edits block |
 | `asks` | interactive questions with attributed answers | ask block |
+| `device_trust` | which device an answer came from | device trust block |
 | `speaker:full` / `speaker:name_only` | alternate outbound identities | speaker block |
 | `threads_out` | opening work-stream threads | threads block |
 | `chat_parents` | parent context on inbound thread messages | threads block |
@@ -220,6 +221,74 @@ multi-select.
 Rendering these natively is tracked work and will arrive behind its own
 feature string (select menus, modals), so nothing you implement today
 changes.
+
+Device trust (protocol 2, feature `"device_trust"`) answers a second
+question about an answer. `attestation` says which account answered.
+`device_trust` says whether the answer came from a device that the
+account's own identity has signed.
+
+The two differ on a platform with keys for each device. On Matrix, an
+access token copied from an unverified login can send a reaction. The
+homeserver authenticates the sender, so that answer is `attested`. It is
+enough to answer a question. It must not be enough for an answer that
+gives authority, such as the approval of a merge.
+
+```json
+← {"type":"answer","ask_id":"a1","key":"approve",
+   "user_id":"u1","username":"drew","attestation":"attested",
+   "device_trust":"verified"}
+```
+
+Declare the feature in your hello `capabilities.features`, and send
+`"device_trust":"verified"` on an answer only when all of these hold:
+
+- Your platform gives each device its own keys, and the keys of one
+  device made the answer: they signed it, or they encrypted it. A
+  session token alone must not be able to produce the proof.
+- The answering user's own identity has signed that device. On Matrix
+  this is a device that the user's cross-signing identity has signed.
+- You hold that identity as verified. A person compared it and confirmed
+  it, or your own account signed it after a person said so. An identity
+  that you only saw first is not verified: the server gave it to you,
+  and a server can give you another one.
+- The identity has not changed since it was verified. A changed identity
+  is not proof until a person verifies it again.
+- The answer is `attested`.
+
+Leave the field out in every other case. An answer that no device's keys
+signed or encrypted has no device to prove, so it has no `device_trust`.
+
+Check which of your answer widgets can carry the proof at all. On Matrix
+a device's keys do not sign an event, and no client encrypts a reaction,
+in an encrypted room too. A tap on a seeded reaction is therefore an
+answer that never has `device_trust`. A typed reply to the question is an
+encrypted message, and it can. A connector for such a platform must
+accept the second kind of answer, or no answer from it is ever verified.
+
+Read the device's state when the answer arrives, and not from a record
+your platform's library made earlier. The Matrix SDK files a sender's
+state with each room key when the key arrives. A key that arrived before
+the person's identity was verified keeps the older state.
+
+terva reads the field as unverified unless every check passes on its
+side too. It reads `verified` only from a connector that declared the
+feature, only on an `attested` answer, and only for that exact value. An
+absent field, an unknown value, and an older connector all read as
+unverified. Nothing else changes for them: the answer still arrives, and
+a question is still answered.
+
+terva records the result on the answer, and it records whether your
+connector declared the feature. No part of terva refuses an answer by
+it today. The field exists so that a later rule can refuse an answer
+that gives authority unless a verified device sent it.
+
+A platform with no keys for each device cannot prove this. Telegram and
+Discord are two. Do not declare the feature there. Every answer from
+such a connector reads as unverified, and a question is still answered.
+
+A third `attestation` value would have been a smaller change. It lost
+because one field would then answer two questions, and every reader
+would need to know the order of its values.
 
 Speaker identity (protocol 2, feature `"speaker:full"` or
 `"speaker:name_only"`) exists because personas and the `--play` cast want

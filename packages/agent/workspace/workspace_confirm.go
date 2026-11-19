@@ -256,9 +256,10 @@ func (s *wsSession) approve(callID string, d permission.ConfirmDecision) {
 	s.permPark.Deliver(callID, d)
 }
 
-// answer delivers an answer set to a parked webAsker. First answer wins.
-func (s *wsSession) answer(askID string, answers []core.UserAnswer) {
-	s.askPark.Deliver(askID, answers)
+// answer delivers an answer set to a parked webAsker. First answer wins, and
+// it reports whether this one did.
+func (s *wsSession) answer(askID string, answers []core.UserAnswer) bool {
+	return s.askPark.Deliver(askID, answers)
 }
 
 // recordAsk is recordPermission's twin for a question set.

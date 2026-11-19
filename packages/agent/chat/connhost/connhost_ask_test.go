@@ -331,3 +331,136 @@ func TestSessionStartThread(t *testing.T) {
 	default:
 	}
 }
+
+// askOnce poses one ask to a connector that declared features, answers
+// it with answer, and returns what the host made of that answer.
+func askOnce(t *testing.T, features []string, answer connproto.AnswerFromConn) chat.Answer {
+	t.Helper()
+	s, sc := startAskSession(t, features)
+	type result struct {
+		ans chat.Answer
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ans, err := s.Ask(context.Background(), chat.Ask{
+			ChatID: "c1", Text: "merge it?",
+			Options:    []chat.AskOption{{Key: "approve", Label: "Approve"}, {Key: "deny", Label: "Deny"}},
+			RestrictTo: []string{"u1"},
+			Timeout:    5 * time.Second,
+		})
+		done <- result{ans, err}
+	}()
+	var ask connproto.AskFromHost
+	if err := json.Unmarshal(sc.next(t, "ask"), &ask); err != nil {
+		t.Fatalf("decode ask: %v", err)
+	}
+	sc.push(t, connproto.ResultFromConn{Type: "result", ID: ask.ID, MessageID: "m-1"})
+	answer.Type, answer.AskID = "answer", ask.ID
+	sc.push(t, answer)
+	var cl connproto.AskCloseFromHost
+	if err := json.Unmarshal(sc.next(t, "ask_close"), &cl); err != nil {
+		t.Fatalf("decode ask_close: %v", err)
+	}
+	sc.push(t, connproto.ResultFromConn{Type: "result", ID: cl.ID})
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Ask: %v", r.err)
+		}
+		return r.ans
+	case <-time.After(3 * time.Second):
+		t.Fatal("Ask never returned")
+		return chat.Answer{}
+	}
+}
+
+// 🚨 The same person answers the same ask twice, once from a device the
+// connector proved and once from one it did not. Both answers are
+// attested and both carry the answer. Only the first may give authority.
+func TestTheHostTellsAVerifiedDeviceFromAnUnverifiedOne(t *testing.T) {
+	features := []string{"asks", connproto.FeatureDeviceTrust}
+	verified := askOnce(t, features, connproto.AnswerFromConn{
+		Key: "approve", UserID: "u1", Attestation: connproto.AttestationAttested,
+		DeviceTrust: connproto.DeviceTrustVerified,
+	})
+	unverified := askOnce(t, features, connproto.AnswerFromConn{
+		Key: "approve", UserID: "u1", Attestation: connproto.AttestationAttested,
+	})
+	if !verified.VerifiedDevice {
+		t.Errorf("answer = %+v, want a verified device", verified)
+	}
+	if unverified.VerifiedDevice {
+		t.Errorf("answer = %+v, want an unverified device", unverified)
+	}
+	// The answer itself is the same either way. A question still gets its
+	// answer from an unverified device.
+	if verified.Key != "approve" || unverified.Key != "approve" ||
+		verified.Attestation != chat.AttestationAttested || unverified.Attestation != chat.AttestationAttested {
+		t.Errorf("answers = %+v and %+v, want the same attested approval", verified, unverified)
+	}
+}
+
+// 🚨 Every doubt reads as an unverified device. Each row is one way a
+// frame can say "verified" without the proof behind it.
+func TestADeviceIsVerifiedOnlyWithEveryProof(t *testing.T) {
+	withTrust := []string{"asks", connproto.FeatureDeviceTrust}
+	for _, tc := range []struct {
+		name     string
+		features []string
+		answer   connproto.AnswerFromConn
+	}{
+		{
+			"the connector never declared the feature",
+			[]string{"asks"},
+			connproto.AnswerFromConn{Attestation: connproto.AttestationAttested, DeviceTrust: connproto.DeviceTrustVerified},
+		},
+		{
+			"the account is not attested",
+			withTrust,
+			connproto.AnswerFromConn{Attestation: connproto.AttestationBestEffort, DeviceTrust: connproto.DeviceTrustVerified},
+		},
+		{
+			"the attestation is absent",
+			withTrust,
+			connproto.AnswerFromConn{DeviceTrust: connproto.DeviceTrustVerified},
+		},
+		{
+			"the value is one this host does not know",
+			withTrust,
+			connproto.AnswerFromConn{Attestation: connproto.AttestationAttested, DeviceTrust: "trusted"},
+		},
+		{
+			"the value differs in case",
+			withTrust,
+			connproto.AnswerFromConn{Attestation: connproto.AttestationAttested, DeviceTrust: "Verified"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.answer.Key, tc.answer.UserID = "approve", "u1"
+			got := askOnce(t, tc.features, tc.answer)
+			if got.VerifiedDevice {
+				t.Errorf("answer = %+v, want an unverified device", got)
+			}
+			if got.Key != "approve" {
+				t.Errorf("answer = %+v, want the approval to arrive all the same", got)
+			}
+		})
+	}
+}
+
+// The host tells a connector that it reads device trust, and it records
+// whether the connector can prove it.
+func TestDeviceTrustIsNegotiated(t *testing.T) {
+	if !contains(hostFeatures, connproto.FeatureDeviceTrust) {
+		t.Errorf("hostFeatures = %v, want %q so a connector knows the host reads it", hostFeatures, connproto.FeatureDeviceTrust)
+	}
+	with, _ := startAskSession(t, []string{"asks", connproto.FeatureDeviceTrust})
+	if !with.Capabilities().DeviceTrust {
+		t.Error("a connector that declared device_trust should set Capabilities.DeviceTrust")
+	}
+	without, _ := startAskSession(t, []string{"asks"})
+	if without.Capabilities().DeviceTrust {
+		t.Error("a connector that did not declare device_trust must not set Capabilities.DeviceTrust")
+	}
+}

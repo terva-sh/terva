@@ -48,6 +48,10 @@
 .talkoot-side-foot { margin-top: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); }
 .talkoot-spend { font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }
 .talkoot-budget { display: flex; flex-direction: column; gap: 6px; }
+.talkoot-chat { display: flex; flex-direction: column; gap: 6px; }
+.talkoot-outbound { display: flex; flex-direction: column; gap: 4px; }
+.talkoot-held { margin: 0; padding-left: 16px; font-size: var(--fs-note); max-height: 180px; overflow-y: auto; }
+.talkoot-held-why { color: var(--muted); }
 .talkoot-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .talkoot-main-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .talkoot-main-meta { font-size: var(--fs-note); color: var(--muted); }

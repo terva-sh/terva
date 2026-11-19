@@ -130,6 +130,8 @@ func runWebServer(ctx context.Context, args build.Args, version string, ready fu
 	// Talkoots run in a daemon, never in an in-process terminal: see
 	// Workspace.LoadTalkoots.
 	ws.LoadTalkoots()
+	// Timers run in a daemon for the same reason: see Workspace.LoadTimers.
+	ws.LoadTimers()
 	// A credential-less start is fatal only when nothing reachable can fix it.
 	//
 	// With provider login enabled the browser IS a login flow — the Providers
@@ -170,6 +172,30 @@ func runWebServer(ctx context.Context, args build.Args, version string, ready fu
 			return fmt.Errorf("terva web: required chat attachment failed: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "terva web: chat connector %q attached to session %q\n", args.WebChatConnector, args.WebChatSession)
+	}
+	// The talkoot_chat key binds a connector to a team. A workspace runs one
+	// bridge, so the flag above wins when both are set, and this says so.
+	//
+	// A refusal here is reported and the daemon starts anyway. The Talkoot app
+	// is the other way to reach the team, and the only place a person grants
+	// what chat cannot, so a bad key must not take the app down with it.
+	if tc := config.TalkootChat(); tc != nil {
+		switch {
+		case args.WebChatConnector != "":
+			fmt.Fprintf(os.Stderr, "terva web: talkoot_chat is ignored, because --web-chat-connector already holds the one chat bridge\n")
+		default:
+			opt := workspace.TalkootChatOptions{Brief: tc.Brief, Quiet: tc.Quiet}
+			if err := ws.AttachTalkootChatWith(tc.Talkoot, tc.Person, tc.Connector, opt); err != nil {
+				fmt.Fprintf(os.Stderr, "terva web: talkoot_chat: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "terva web: chat bridge for talkoot %q is connecting\n", tc.Talkoot)
+			}
+		}
+	}
+	// 🚨 A talkoot_chat key that starts no bridge is reported here. With no
+	// line, a person who set the key alone waits on a bot that never answers.
+	if problem := config.TalkootChatProblem(); problem != "" {
+		fmt.Fprintf(os.Stderr, "terva web: no chat bridge for a talkoot: %s\n", problem)
 	}
 	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
 	cfg, _ := config.LoadConfig()

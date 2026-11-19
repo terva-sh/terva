@@ -129,6 +129,11 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"ticket_actor":                        "a git-ticket actor id such as human:alex — an identity a store records beside every write, and public by construction: it is meant to be read by anyone who reads the ledger",
 		"ticket_stores.*":                     "paths into the user's own tree, the same as context_files[]; naming where ticket writes may land is an authority decision, not a secret",
 		"user_name":                           "the user's display name — personal, but not a credential",
+		"talkoot_chat.talkoot":                "a talkoot's id, a directory name under $TERVA_HOME/talkoot",
+		"talkoot_chat.connector":              "the NAME of a chat connector — its token lives in the connector's own file, never here",
+		"talkoot_chat.person":                 "the name the room records beside the owner's posts — personal, but not a credential",
+		"talkoot_chat.brief[]":                "times of day, such as 07:30, at which the bridge sends what it held",
+		"talkoot_chat.quiet":                  "a range of times of day, such as 22:00-07:00, in which the bridge holds its messages",
 
 		// User-authored command lines. A token pasted inline into one is a real
 		// leak and is NOT covered: detecting it means pattern-sniffing shell,

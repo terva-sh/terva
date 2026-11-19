@@ -188,9 +188,21 @@ docs/proposals/web-surfaces.md). Today's panes:
   whichever session a tab happens to be showing, so rebinding is explicit.
   Workspace-global, like the bridge itself. A running `terva bot` daemon already
   polling the service blocks connecting (both consumers would race each update
-  and one always loses); the pane says so and names the pid. The pane is offered
+  and one always loses); the pane says so and names the pid. When the
+`talkoot_chat` key is set and starts no bridge, the pane gives the reason. The pane is offered
   whenever any chat service is registered, so it can explain "not configured"
-  rather than silently going missing. See [connectors.md](connectors.md).
+  rather than silently going missing. See [connectors.md](connectors.md). A
+  bridge that the `talkoot_chat` key bound to a team mirrors no session, so
+  the pane names none. **mirror this session** is then refused until you
+  **disconnect**, because a workspace runs one bridge
+  ([talkoot.md](talkoot.md#reach-the-team-from-chat)).
+- **Timers**: the timers that the daemon keeps: a team member's wakes, the
+  schedule of each routine, and the brief and quiet hours of a team's chat
+  bridge. Each line gives the timer's label and owner, its schedule, and its
+  next time in the daemon's zone, or what the timer waits on. The pane is
+  offered only while the daemon holds a timer or has a problem to report. It
+  lists and does not change: cancel a wake or pause a routine in the Talkoot
+  app. See [scheduled-jobs.md](scheduled-jobs.md#the-daemons-timer-service).
 - **MCP**: the Model Context Protocol server manager. `terva web` now starts the
   configured MCP servers (user `config.json` + a trusted project's) once for the
   daemon and merges their tools into every session, so MCP tools are usable in
@@ -473,7 +485,10 @@ session's deliverables.
 
 Sending while a turn is running queues the message (shown as a dashed bubble).
 Before the agent consumes it you can **edit** it in place (✎) or **remove** it
-(×); the change is pushed to the queue and broadcast to every open tab.
+(×); the change is pushed to the queue and broadcast to every open tab. A
+queued text that terva wrote, such as the report on a batch of sub-agents or
+a message that a team's room delivered, names its writer and offers **remove**
+alone, because an edit would put your words under terva's name.
 
 Stop stays available through tool execution, approval waits, and provider
 retry delays. Enter submits a text follow-up to the queue in both the panel

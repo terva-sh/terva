@@ -21,6 +21,7 @@
 {"name":"result error","dir":"conn_to_host","frame":"{\"type\":\"result\",\"id\":\"42\",\"error\":\"rate limited\"}"}
 {"name":"warn","dir":"conn_to_host","frame":"{\"type\":\"warn\",\"message\":\"gateway reconnecting\"}"}
 {"name":"answer attested","dir":"conn_to_host","frame":"{\"type\":\"answer\",\"ask_id\":\"a1\",\"key\":\"approve\",\"user_id\":\"u1\",\"username\":\"drew\",\"attestation\":\"attested\"}"}
+{"name":"answer from a verified device","dir":"conn_to_host","frame":"{\"type\":\"answer\",\"ask_id\":\"a1\",\"key\":\"approve\",\"user_id\":\"u1\",\"username\":\"drew\",\"attestation\":\"attested\",\"device_trust\":\"verified\"}"}
 {"name":"answer minimal","dir":"conn_to_host","frame":"{\"type\":\"answer\",\"ask_id\":\"a1\",\"key\":\"deny\",\"user_id\":\"u2\"}"}
 {"name":"hello_ack","dir":"host_to_conn","frame":"{\"type\":\"hello_ack\",\"protocol\":1,\"zot_version\":\"1.2.3\",\"data_dir\":\"/home/u/.zot/connectors/discord/data\"}"}
 {"name":"hello_ack both naming eras","dir":"host_to_conn","frame":"{\"type\":\"hello_ack\",\"protocol\":1,\"zot_version\":\"1.2.3\",\"terva_version\":\"1.2.3\"}"}

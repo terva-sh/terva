@@ -291,6 +291,31 @@ From then on, any DM you send is forwarded to the agent as a user prompt. Attach
 
 Bot mode respects the usual terva flags: `--provider`, `--model`, `--cwd`, `--thinking`, `--continue`, `--no-session`, `--no-tools`, and so on. Run `terva tg run -c --model claude-opus-4-1` to resume the latest session on Opus, for example. The paired DM's transcript persists **message by message** (the same durable hooks the TUI and ACP sessions use), so a daemon crash costs at most the in-flight turn and a restart with `--continue` picks the conversation back up; ask the bot to run `terva_status` to get the session id and file. Group chats are live-only (see below).
 
+### A team in the web daemon
+
+`terva web` can bind one connector to a talkoot, a persistent team of agents,
+in place of a session. Your messages then go to the team's coordinator, and
+what the team says to you comes back. The `talkoot_chat` key in your user
+configuration turns it on, while `talkoot_enabled` is on:
+
+```json
+{
+  "talkoot_enabled": true,
+  "talkoot_chat": { "talkoot": "crew", "connector": "telegram", "person": "sothr" }
+}
+```
+
+With `talkoot_enabled` off the key starts no bridge. The daemon says so on
+standard error when it starts, and the **Chat** pane of the web panel shows
+the reason.
+
+The connector needs no change for this. The bridge uses the same contract
+that the session bridge uses: direct messages in, text out, and the
+connector's own ask widget when it has one. A question the widget cannot
+carry goes out as text, and your next message answers it.
+[The chat section of talkoot.md](talkoot.md#reach-the-team-from-chat) describes
+what the bridge sends, what it holds back, and what chat cannot approve.
+
 ### Groups
 
 The Telegram connector serves private chats only, so this section

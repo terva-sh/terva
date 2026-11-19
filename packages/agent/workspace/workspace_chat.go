@@ -23,10 +23,12 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/extconn"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/modelreg"
+	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -44,6 +46,13 @@ import (
 type wsChat struct {
 	mu      sync.Mutex
 	bridges map[string]*boundBridge
+	// stopKeep ends the goroutine that dials a talkoot's bridge again after a
+	// failed handshake. A stopped bridge must not be dialed back to life.
+	stopKeep context.CancelFunc
+	// outbound holds each talkoot bridge's held messages and its rules, by
+	// talkoot id. It outlives a dial, so a bridge that drops and comes back
+	// still has its queue. See workspace_chat_outbound.go.
+	outbound map[string]*chatOutbound
 	// dials counts chatDial goroutines still in flight.
 	//
 	// 🪤 Stopping the BRIDGES is not the same as stopping the connect, and the
@@ -65,8 +74,16 @@ type wsChat struct {
 type boundBridge struct {
 	bridge *chat.Bridge
 	sess   string // session id the mirror is bound to
-	state  string // connecting | connected | error
-	err    string // last dial failure, surfaced on the pane
+	// talkoot and person are set in place of sess when the bridge serves a
+	// talkoot: the team's id, and the name the owner's posts carry in its
+	// room. pump carries the team's events out, and stopPump ends it.
+	// See workspace_chat_talkoot.go.
+	talkoot  string
+	person   string
+	pump     *chatTeamPump
+	stopPump func()
+	state    string // connecting | connected | error
+	err      string // last dial failure, surfaced on the pane
 
 	// ready receives the result of the initial connector handshake. Manual
 	// connects ignore it; web startup waits on it before serving the listener.
@@ -130,6 +147,7 @@ func (w *Workspace) chatStopAll() {
 	w.chat.mu.Lock()
 	live := make([]*chat.Bridge, 0, len(w.chat.bridges))
 	cancels := make([]context.CancelFunc, 0, len(w.chat.bridges))
+	var pumps []func()
 	for _, b := range w.chat.bridges {
 		if b.bridge != nil {
 			live = append(live, b.bridge)
@@ -137,6 +155,13 @@ func (w *Workspace) chatStopAll() {
 		if b.cancel != nil {
 			cancels = append(cancels, b.cancel)
 		}
+		if b.stopPump != nil {
+			pumps = append(pumps, b.stopPump)
+		}
+	}
+	if w.chat.stopKeep != nil {
+		cancels = append(cancels, w.chat.stopKeep)
+		w.chat.stopKeep = nil
 	}
 	if len(w.chat.bridges) > 0 {
 		w.chatUnbindExtHostLocked()
@@ -145,6 +170,11 @@ func (w *Workspace) chatStopAll() {
 	w.chat.mu.Unlock()
 	for _, cancel := range cancels {
 		cancel()
+	}
+	// The pump first: it sends through the bridge, so it must end while the
+	// bridge can still refuse a send cleanly.
+	for _, stop := range pumps {
+		stop()
 	}
 	for _, b := range live {
 		b.Stop()
@@ -232,7 +262,21 @@ func (w *Workspace) AttachChat(ctx context.Context, sessID, name string, timeout
 // manual and startup attachment. The returned channel is buffered so the dial
 // goroutine never blocks if a manual caller ignores it.
 func (w *Workspace) chatConnectReady(sessID, name string) (string, <-chan error, error) {
-	if _, err := w.resolve(sessID); err != nil {
+	return w.chatConnectTarget(chatTarget{sess: sessID}, name)
+}
+
+// chatConnectTarget is chatConnectReady for either kind of target: a session,
+// or a talkoot.
+func (w *Workspace) chatConnectTarget(t chatTarget, name string) (string, <-chan error, error) {
+	if t.talkoot != "" {
+		if _, err := w.talkootRunOf(t.talkoot); err != nil {
+			return "", nil, talkootWireErr(err, ctrlproto.CodeBadRequest)
+		}
+		if !talkoot.ValidPerson(t.person) {
+			return "", nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+				"talkoot: %q must name a person in 1 to 64 letters, digits, and . _ @ -", t.person)
+		}
+	} else if _, err := w.resolve(t.sess); err != nil {
 		return "", nil, err
 	}
 	if name == "" {
@@ -285,10 +329,12 @@ func (w *Workspace) chatConnectReady(sessID, name string) (string, <-chan error,
 			"%s", i18n.T("%s is already connected — disconnect it first (one bridge per workspace: connector extensions share a single host slot)", existingName))
 	}
 	w.chat.bridges[svc.Name] = &boundBridge{
-		sess:   sessID,
-		state:  chatStateConnecting,
-		ready:  ready,
-		cancel: cancel,
+		sess:    t.sess,
+		talkoot: t.talkoot,
+		person:  t.person,
+		state:   chatStateConnecting,
+		ready:   ready,
+		cancel:  cancel,
 	}
 	// Bind under the registry lock: every slot mutation happens inside a
 	// w.chat.mu critical section, so an unbind from a dying bridge can never
@@ -296,9 +342,12 @@ func (w *Workspace) chatConnectReady(sessID, name string) (string, <-chan error,
 	w.chatBindExtHostLocked(svc.Name)
 	w.chat.mu.Unlock()
 	w.chatChanged()
+	if t.talkoot != "" {
+		w.announceTalkoots()
+	}
 
 	w.chat.dials.Add(1)
-	go w.chatDial(svc, sessID, dialCtx)
+	go w.chatDial(svc, t, dialCtx)
 	return svc.Name, ready, nil
 }
 
@@ -312,10 +361,19 @@ func (w *Workspace) chatWaitDials() { w.chat.dials.Wait() }
 // chatDial performs the blocking half of a connect: build the connector, run the
 // handshake, start receiving, then re-derive the bound session's tools so the
 // model gains chat_send_image / chat_send_file on its next turn.
-func (w *Workspace) chatDial(svc chat.Service, sessID string, dialCtx context.Context) {
+func (w *Workspace) chatDial(svc chat.Service, t chatTarget, dialCtx context.Context) {
 	defer w.chat.dials.Done()
-	host := &chatWsHost{w: w, service: svc.Name}
+	sessID := t.sess
+	var host chat.Host = &chatWsHost{w: w, service: svc.Name}
+	var team *chatTeamHost
+	if t.talkoot != "" {
+		team = &chatTeamHost{w: w, service: svc.Name, id: t.talkoot, person: t.person}
+		host = team
+	}
 	conn, pairing, err := svc.NewConnector(w.root, func(msg string) { host.Notify("warn", msg) })
+	if err == nil && team != nil && pairing.AllowedUserID == "" {
+		err = errChatTeamUnpaired
+	}
 	if err == nil {
 		// DM-only, deliberately: the bridge has a single session and transcript,
 		// so it cannot isolate approved group chats the way the bot daemon's
@@ -323,6 +381,13 @@ func (w *Workspace) chatDial(svc chat.Service, sessID string, dialCtx context.Co
 		// builds its gate with a nil admissions store, keeping every non-DM chat
 		// silent.
 		b := &chat.Bridge{Connector: conn, Host: host, Pairing: pairing}
+		if team != nil {
+			team.bridge = b
+			b.StopText = i18n.T("paused the team. resume it in the Talkoot app.")
+			b.HelpText = i18n.T("this chat reaches your team. send a message and it goes to the coordinator. commands: /status, /stop, or plain stop.")
+			b.TextOnly = true
+			b.TextOnlyNote = i18n.T("attachments do not reach a team yet. only the text was sent.")
+		}
 		if err = b.Start(dialCtx); err == nil {
 			if !w.chatSetLive(svc.Name, b) {
 				// A disconnect raced the dial: the registry entry is gone and
@@ -332,6 +397,9 @@ func (w *Workspace) chatDial(svc chat.Service, sessID string, dialCtx context.Co
 				b.Stop()
 				w.chatSignalReady(svc.Name, fmt.Errorf("connection canceled before the bridge became live"))
 				return
+			}
+			if team != nil {
+				w.chatTeamLive(svc.Name, team, b)
 			}
 			w.chatRebuildBound(sessID, "chat-connect")
 			w.chatChanged()
@@ -343,6 +411,10 @@ func (w *Workspace) chatDial(svc chat.Service, sessID string, dialCtx context.Co
 	w.chatCancelDial(svc.Name)
 	w.chatSetError(svc.Name, err.Error())
 	w.chatChanged()
+	if t.talkoot != "" {
+		// The team shows its bridge, so a failed dial is news there too.
+		w.announceTalkoots()
+	}
 	host.Notify("error", i18n.T("%s connect failed: %v", svc.Name, err))
 	w.chatSignalReady(svc.Name, err)
 }
@@ -404,16 +476,29 @@ func (w *Workspace) chatStopService(service string) {
 	}
 	delete(w.chat.bridges, service)
 	w.chatUnbindExtHostLocked()
-	live, sess, cancel := b.bridge, b.sess, b.cancel
+	live, sess, cancel, stopPump, team := b.bridge, b.sess, b.cancel, b.stopPump, b.talkoot
+	var stopKeep context.CancelFunc
+	if team != "" {
+		stopKeep, w.chat.stopKeep = w.chat.stopKeep, nil
+	}
 	w.chat.mu.Unlock()
+	if stopKeep != nil {
+		stopKeep()
+	}
 	if cancel != nil {
 		cancel()
+	}
+	if stopPump != nil {
+		stopPump()
 	}
 	if live != nil {
 		live.Stop()
 	}
 	w.chatRebuildBound(sess, "chat-disconnect")
 	w.chatChanged()
+	if team != "" {
+		w.announceTalkoots()
+	}
 }
 
 // chatRebind moves the mirror to another live session. An explicit user act:
@@ -426,6 +511,14 @@ func (w *Workspace) chatRebind(sessID string) error {
 	var prev string
 	found := false
 	for _, b := range w.chat.bridges {
+		if b.talkoot != "" {
+			// A talkoot's bridge has a pump and a team host. Moving it to a
+			// session would leave both running against a bridge that no longer
+			// serves the team.
+			w.chat.mu.Unlock()
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s",
+				i18n.T("the chat bridge serves the talkoot %q — disconnect it first", b.talkoot))
+		}
 		prev, b.sess, found = b.sess, sessID, true
 		break
 	}
@@ -483,6 +576,26 @@ func (w *Workspace) chatRebuildBound(sessID, reason string) {
 // chatChanged tells every client the chat pane moved.
 func (w *Workspace) chatChanged() {
 	w.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("chat"))
+}
+
+// chatTeamLive starts the pump of a talkoot's bridge that just connected, and
+// tells the Talkoot app, which shows the bridge on the team it serves.
+func (w *Workspace) chatTeamLive(service string, team *chatTeamHost, b *chat.Bridge) {
+	pump, stop := w.chatTeamStart(team, b)
+	w.chat.mu.Lock()
+	bb := w.chat.bridges[service]
+	if bb != nil && bb.bridge == b {
+		bb.pump, bb.stopPump = pump, stop
+		stop = nil
+	}
+	w.chat.mu.Unlock()
+	if stop != nil {
+		// A disconnect removed the entry between the handshake and here, so
+		// nothing would ever stop this pump.
+		stop()
+		return
+	}
+	w.announceTalkoots()
 }
 
 // --- the extension host binding -------------------------------------------
@@ -556,7 +669,7 @@ func (w *Workspace) chatUnbindExtHostLocked() {
 // --- pane ---------------------------------------------------------------
 
 func (w *Workspace) chatView() ctrlproto.ChatView {
-	var cv ctrlproto.ChatView
+	cv := ctrlproto.ChatView{Problem: config.TalkootChatProblem()}
 	for _, svc := range chat.Services() {
 		info := ctrlproto.ChatServiceInfo{
 			Name:       svc.Name,
@@ -586,7 +699,7 @@ func (w *Workspace) chatView() ctrlproto.ChatView {
 		return cv
 	}
 	st := ctrlproto.ChatBridgeState{
-		State: bb.state, Connector: service, Session: bb.sess, Error: bb.err,
+		State: bb.state, Connector: service, Session: bb.sess, Talkoot: bb.talkoot, Error: bb.err,
 	}
 	live := bb.bridge
 	w.chat.mu.Unlock()

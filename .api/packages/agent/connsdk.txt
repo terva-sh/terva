@@ -3,6 +3,7 @@
 Answer	type	struct
 Answer.AskID	field	string
 Answer.Attestation	field	string
+Answer.DeviceTrust	field	string
 Answer.Key	field	string
 Answer.UserID	field	string
 Answer.Username	field	string
@@ -58,6 +59,7 @@ Config.Setup	field	func() error
 Config.Status	field	func() (string, error)
 Config.Verbs	field	map[string]func() error
 Config.Version	field	string
+DeviceTrustVerified	const	untyped string
 Entity	type	struct
 Entity.Kind	field	string
 Entity.Length	field	int

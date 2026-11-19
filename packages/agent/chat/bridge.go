@@ -71,6 +71,21 @@ type Bridge struct {
 	Pairing    Pairing
 	HelpText   string
 	PairedText string
+	// StopText is the reply to /stop. A host whose CancelTurn does something
+	// other than cancel a turn says what it did here. "" keeps the default.
+	StopText string
+	// TextOnly drops a message's images and files before the host sees it, and
+	// tells the sender with TextOnlyNote. A host that cannot hand an
+	// attachment to anything sets it, so a staged file does not wait on disk
+	// for a turn that will never read it.
+	TextOnly     bool
+	TextOnlyNote string
+
+	// askSem serializes AskQuestions, and textAsk is the one text-floor
+	// question waiting for the owner's next message. See bridge_ask.go.
+	askOnce sync.Once
+	askSem  chan struct{}
+	textAsk *bridgeTextAsk
 
 	mu    sync.Mutex
 	phase bridgePhase
@@ -329,9 +344,30 @@ func (b *Bridge) handle(m Message) {
 	case actStop:
 		b.rememberChat(m.ChatID)
 		b.Host.CancelTurn()
-		_ = b.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: "cancelled the current turn."})
+		stopped := b.StopText
+		if stopped == "" {
+			stopped = "cancelled the current turn."
+		}
+		_ = b.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: stopped})
 	case actPrompt:
 		b.rememberChat(m.ChatID)
+		// An open text-floor question gets first claim on the message, as it
+		// does in the Loop. A message that is not an answer flows on as a
+		// prompt.
+		if b.takeTextAnswer(m) {
+			cleanupFiles(m)
+			return
+		}
+		if b.TextOnly && (len(m.Files) > 0 || len(m.Images) > 0) {
+			cleanupFiles(m)
+			m.Files, m.Images = nil, nil
+			if b.TextOnlyNote != "" {
+				_ = b.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: b.TextOnlyNote})
+			}
+			if strings.TrimSpace(m.Text) == "" {
+				return
+			}
+		}
 		b.mu.Lock()
 		b.nextReplyFromChat = true
 		// Ownership of the staged files passes to the bridge here, and is

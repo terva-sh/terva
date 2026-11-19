@@ -171,7 +171,7 @@ type pendingAsk struct {
 // and B); advertised in hello_ack so connectors never emit constructs
 // nobody reads.
 var hostFeatures = []string{"message_ids", "chat_kinds", "asks", "entities", "chat_membership",
-	"edits_in", "deletes_in", "reactions_in", "attachment_kinds", "chat_parents"}
+	"edits_in", "deletes_in", "reactions_in", "attachment_kinds", "chat_parents", connproto.FeatureDeviceTrust}
 
 type connectOutcome struct {
 	identity chat.Identity
@@ -277,6 +277,7 @@ func (s *Session) Start(helloTimeout time.Duration) error {
 		SendsImages:     hello.Capabilities.SendsImages,
 		SendsFiles:      hello.Capabilities.SendsFiles,
 		Asks:            version >= 2 && contains(hello.Capabilities.Features, "asks"),
+		DeviceTrust:     version >= 2 && contains(hello.Capabilities.Features, connproto.FeatureDeviceTrust),
 		Speaker:         speakerGrade(version, hello.Capabilities.Features),
 		ThreadsOut:      version >= 2 && contains(hello.Capabilities.Features, "threads_out"),
 		TypingStop:      version >= 2 && contains(hello.Capabilities.Features, "typing_stop"),
@@ -840,7 +841,8 @@ func (s *Session) Ask(ctx context.Context, a chat.Ask) (chat.Answer, error) {
 		s.closeAsk(id, closeOutcome(a, ans))
 		return chat.Answer{
 			Key: ans.Key, UserID: ans.UserID, Username: ans.Username,
-			Attestation: normalizeAttestation(ans.Attestation),
+			Attestation:    normalizeAttestation(ans.Attestation),
+			VerifiedDevice: verifiedDevice(s.Capabilities().DeviceTrust, ans),
 		}, nil
 	case <-time.After(timeout):
 		unregister()
@@ -893,6 +895,19 @@ func closeOutcome(a chat.Ask, ans connproto.AnswerFromConn) string {
 		who = ans.UserID
 	}
 	return label + " — @" + who
+}
+
+// verifiedDevice reads an answer's device trust, and every doubt reads
+// false. 🚨 It fails closed three ways. A connector that did not declare
+// the feature gets false whatever the frame holds, because the frame
+// then makes a claim that the connector never said it can prove. A value
+// other than "verified" is false, the absent value included. An answer
+// that is not attested is false, because a device proof for an account
+// that the platform did not prove is no proof.
+func verifiedDevice(declared bool, ans connproto.AnswerFromConn) bool {
+	return declared &&
+		ans.DeviceTrust == connproto.DeviceTrustVerified &&
+		ans.Attestation == connproto.AttestationAttested
 }
 
 // normalizeAttestation maps the wire's open set onto the two grades

@@ -240,6 +240,11 @@ type Capabilities struct {
 	// to a plain-text question — approvals over chat work with EVERY
 	// connector; this only upgrades the widget and the attestation.
 	Asks bool
+	// DeviceTrust is true when the connector can prove which device an
+	// answer came from (wire feature "device_trust"). False means that
+	// no answer from this connector ever has VerifiedDevice set. No
+	// caller reads the field yet.
+	DeviceTrust bool
 	// Speaker grades the connector's alternate-identity rendering:
 	// SpeakerFull (name + avatar), SpeakerNameOnly, or SpeakerNone —
 	// in which case sends with a Speaker get the host's prefix
@@ -366,6 +371,15 @@ type Answer struct {
 	// AttestationBestEffort (parsed text, reactions). Policy that
 	// grants anything durable should require attested.
 	Attestation string
+	// VerifiedDevice is true when the connector proved that the answer
+	// came from a device the answering user's own identity has signed
+	// (wire feature "device_trust"). Attestation answers which account,
+	// and this answers which device. 🚨 The zero value is the safe one:
+	// an answer from a connector that cannot prove it, a parsed text
+	// reply, and an older connector all read false. Code that gives
+	// authority on an answer must require true. No caller reads the
+	// field yet.
+	VerifiedDevice bool
 }
 
 // Attestation grades for Answer (mirroring the wire constants).

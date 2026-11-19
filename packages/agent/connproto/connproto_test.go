@@ -178,6 +178,14 @@ var goldenFrames = []goldenFrame{
 		`{"type":"answer","ask_id":"a1","key":"approve","user_id":"u1","username":"drew","attestation":"attested"}`,
 	},
 	{
+		// Feature "device_trust": the answer names the device as well
+		// as the account. An older host ignores the field.
+		"answer from a verified device",
+		AnswerFromConn{Type: "answer", AskID: "a1", Key: "approve", UserID: "u1",
+			Username: "drew", Attestation: AttestationAttested, DeviceTrust: DeviceTrustVerified},
+		`{"type":"answer","ask_id":"a1","key":"approve","user_id":"u1","username":"drew","attestation":"attested","device_trust":"verified"}`,
+	},
+	{
 		"answer minimal",
 		AnswerFromConn{Type: "answer", AskID: "a1", Key: "deny", UserID: "u2"},
 		`{"type":"answer","ask_id":"a1","key":"deny","user_id":"u2"}`,

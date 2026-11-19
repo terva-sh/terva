@@ -106,10 +106,6 @@ type Workspace struct {
 	// as which member. See workspace_talkoot.go.
 	talkoot wsTalkoot
 
-	// timers is the daemon's timer service. The zero value is a host that
-	// runs none. See workspace_timers.go.
-	timers wsTimers
-
 	// raati is the deliberation board (the raati pane): at most one live
 	// deliberation, run over the workspace swarm. Zero value is an idle
 	// board. See workspace_raati.go.
@@ -163,11 +159,6 @@ type Workspace struct {
 	// mu because that one guards the sessions map and must not be held across
 	// file I/O.
 	stateMu sync.Mutex
-
-	// boot names this daemon instance. A session's state file records it
-	// beside the sub-agents that wait for a report, so that the next instance
-	// can tell that a restart came between (workspace_swarm_record.go).
-	boot string
 
 	// restartMarker is a planned-restart marker recovered from disk at boot (nil
 	// unless the previous stop was an armed supervisor restart). It names the
@@ -341,7 +332,6 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 		ctx:        ctx,
 		cancel:     cancel,
 		sessions:   map[string]*wsSession{},
-		boot:       newBootID(),
 		credErr:    r.CredentialErr,
 		provSwitch: r.ProviderSwitch,
 		sandbox:    r.Sandbox, // shared across sessions; carries the initial jail lock
@@ -604,16 +594,15 @@ func (w *Workspace) RefreshDefaults() error {
 // Close cancels in-flight turns, drains swarm sub-agents, closes open
 // session files, and releases the hook engine. Idempotent.
 func (w *Workspace) Close() error {
-	// Timers first, before the swarm and everything else a firing could
-	// reach, so that no timer fires into a daemon that is shutting down.
-	w.stopTimers()
 	// Drain swarm children BEFORE cancelling the workspace context: a
 	// graceful stop lets each child abort its turn, write its
 	// agent_stopped terminator, and flush its session — so the next
 	// launch's Reload shows "shutdown (offline)", resumable, instead of
 	// an event log cut off mid-sentence. (Children cannot survive the
 	// host anyway: the runner owns their stdout pipes.)
-	w.stopSwarm()
+	if w.swarm != nil {
+		w.swarm.StopAllAndWait(0)
+	}
 	// Stop chat bridges before cancelling the workspace context, so a connector's
 	// receive goroutine never outlives the workspace that owns it.
 	w.chatStopAll()
@@ -645,25 +634,6 @@ func (w *Workspace) Close() error {
 		_ = w.hookEng.Close()
 	}
 	return nil
-}
-
-// stopSwarm stops every sub-agent and waits for each to write its last
-// events.
-//
-// 🚨 It ends each session's watch first. The stop of a sub-agent reads as the
-// end of its task, and a batch would then report itself as finished into a
-// session that is about to close. The state file keeps the batch, and the
-// next daemon reports it (workspace_swarm_record.go).
-func (w *Workspace) stopSwarm() {
-	if w.swarm == nil {
-		return
-	}
-	w.mu.Lock()
-	for _, s := range w.sessions {
-		s.stopSwarmWatch()
-	}
-	w.mu.Unlock()
-	w.swarm.StopAllAndWait(0)
 }
 
 // --- path / id helpers ---
@@ -1181,17 +1151,10 @@ func (w *Workspace) attachmentExtras(sessID string, p ctrlproto.PromptParams) co
 	return extras
 }
 
-func (w *Workspace) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
-	if !ctrlproto.ValidQueueSource(p.Source) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the source of a queued message is not a valid name"))
-	}
+func (w *Workspace) Queue(ctx context.Context, sess, text string) error {
 	if s := w.live(sess); s != nil {
-		s.queueFrom(p.Source, p.Text)
-		// Only what a person typed goes to the bound chat as their words. A
-		// text with a source is a report from another part of the system.
-		if p.Source == "" {
-			w.mirrorUserTyped(s.id, p.Text)
-		}
+		s.queue(text)
+		w.mirrorUserTyped(s.id, text)
 	}
 	return nil
 }
@@ -1204,13 +1167,9 @@ func (w *Workspace) mirrorUserTyped(sessID, text string) {
 	}
 }
 
-func (w *Workspace) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
-	entries, known, err := p.Entries()
-	if err != nil {
-		return err
-	}
+func (w *Workspace) SetQueue(ctx context.Context, sess string, texts []string) error {
 	if s := w.live(sess); s != nil {
-		s.setQueue(entries, known)
+		s.setQueue(texts)
 	}
 	return nil
 }

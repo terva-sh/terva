@@ -25,8 +25,12 @@ func (w *Workspace) Talkoots(ctx context.Context) ([]ctrlproto.TalkootSummary, e
 	}
 	out := make([]ctrlproto.TalkootSummary, 0, len(list))
 	for _, s := range list {
-		out = append(out, ctrlproto.TalkootSummary{ID: s.ID, Home: s.Home, Running: s.Running, Problem: s.Problem,
-			Name: s.Name, Title: s.Title, Color: s.Color, OwnColor: s.OwnColor, State: s.State})
+		sum := ctrlproto.TalkootSummary{ID: s.ID, Home: s.Home, Running: s.Running, Problem: s.Problem,
+			Name: s.Name, Title: s.Title, Color: s.Color, OwnColor: s.OwnColor, State: s.State}
+		if st, ok := w.chatTeamView(s.ID); ok {
+			sum.Chat = &st
+		}
+		out = append(out, sum)
 	}
 	return out, nil
 }
@@ -259,6 +263,9 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 		ID: r.ID, Name: r.Name, Title: r.Title, Home: r.Home, BudgetUSDPerDay: r.BudgetUSDPerDay,
 		Color: look.TeamColor(r.ID, r.Color), OwnColor: r.Color, TeamBudgetWaived: r.TeamBudgetWaived,
 		Text: string(v.Text), Members: make([]ctrlproto.TalkootMember, 0, len(v.Members)), Held: v.Held,
+	}
+	if st, ok := w.chatTeamView(r.ID); ok {
+		out.Chat = &st
 	}
 	members := make([]talkoot.Member, 0, len(v.Members))
 	statuses := make([]talkoot.Status, 0, len(v.Members))

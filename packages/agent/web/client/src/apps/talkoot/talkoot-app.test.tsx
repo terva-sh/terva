@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { fakeClient } from '../../platform/ctrlproto/testing'
-import type { TalkootEnvelope, TalkootLine, TalkootView, Verb } from '../../platform/ctrlproto/types'
+import type { TalkootEnvelope, TalkootLine, TalkootView, Verb, WireEvent } from '../../platform/ctrlproto/types'
 import { TalkootHub } from '../../platform/talkoot/hub'
 import { mentionAt } from '../../ui/talkoot/TalkootComposer'
 import { Shell } from './Shell'
@@ -245,6 +245,49 @@ describe('links and the app switcher', () => {
     expect(document.querySelector('.tka-you a')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /Talkoot/ }))
     expect(screen.getAllByRole('menuitem').map((a) => a.getAttribute('href'))).toEqual(['/', '/talkoot/'])
+  })
+})
+
+describe('the chat bridge of a team', () => {
+  it('shows the bridge the list reports, and follows the list when it changes', async () => {
+    let chat: unknown = { state: 'connecting', connector: 'matrix', talkoot: 'crew' }
+    const client = fakeClient({
+      respond: (m, params) =>
+        m === 'talkoot.list'
+          ? { talkoots: [{ id: 'crew', name: 'crew', running: true, color: '#3366cc', state: 'online', chat }] }
+          : respond(m, params),
+    })
+    const hub = new TalkootHub()
+    render(<Shell client={client} hub={hub} generation={1} />)
+    await screen.findByText('Chat bridge connecting: matrix')
+
+    chat = { state: 'connected', connector: 'matrix', username: 'mieli', paired_id: '@sothr:example.org', talkoot: 'crew' }
+    hub.dispatch('#workspace', { type: 'talkoots_changed' } as WireEvent)
+    await screen.findByText('Chat bridge on: matrix as @mieli')
+  })
+
+  it('drops the block when the list no longer reports a bridge, whatever the view still holds', async () => {
+    let chat: unknown = { state: 'connected', connector: 'matrix', username: 'mieli', paired_id: '@sothr:example.org', talkoot: 'crew' }
+    const client = fakeClient({
+      respond: (m, params) => {
+        if (m === 'talkoot.list') return { talkoots: [{ id: 'crew', name: 'crew', running: true, color: '#3366cc', state: 'online', chat }] }
+        // The view was read while the bridge was on, and nothing reads it again.
+        if (m === 'talkoot.get') return { ...crew, chat: { state: 'connected', connector: 'matrix', username: 'mieli', talkoot: 'crew' } }
+        return respond(m, params)
+      },
+    })
+    const hub = new TalkootHub()
+    render(<Shell client={client} hub={hub} generation={1} />)
+    await screen.findByText('Chat bridge on: matrix as @mieli')
+
+    chat = undefined
+    hub.dispatch('#workspace', { type: 'talkoots_changed' } as WireEvent)
+    await waitFor(() => expect(document.querySelector('.talkoot-chat')).toBeNull())
+  })
+
+  it('shows no bridge block for a team without one', async () => {
+    await open()
+    expect(document.querySelector('.talkoot-chat')).toBeNull()
   })
 })
 

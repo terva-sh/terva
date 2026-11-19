@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -56,6 +59,301 @@ func ExternalWorkersEnabled() bool {
 		return false
 	}
 	return cfg.ExternalWorkersEnabled != nil && *cfg.ExternalWorkersEnabled
+}
+
+// TalkootChat reads the talkoot_chat key from the user layer. It returns nil
+// when the key is unset, when it names no talkoot, or when Talkoot is off: a
+// bridge to a team that the daemon does not load serves nothing.
+func TalkootChat() *TalkootChatConfig {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.TalkootChat == nil || cfg.TalkootChat.Talkoot == "" {
+		return nil
+	}
+	if cfg.TalkootEnabled == nil || !*cfg.TalkootEnabled {
+		return nil
+	}
+	c := *cfg.TalkootChat
+	return &c
+}
+
+// TalkootChatProblem says why a talkoot_chat key that is set starts no
+// bridge. It is empty when the key is unset, and when TalkootChat returns
+// the key.
+//
+// 🚨 TalkootChat returns nil for an unset key and for a refused one alike.
+// A caller that reads it alone starts no bridge and says nothing, and the
+// person then waits on a bot that never answers.
+func TalkootChatProblem() string {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.TalkootChat == nil {
+		return ""
+	}
+	if cfg.TalkootChat.Talkoot == "" {
+		return "talkoot_chat is set, and it names no talkoot"
+	}
+	if cfg.TalkootEnabled == nil || !*cfg.TalkootEnabled {
+		return "talkoot_chat is set, and talkoot_enabled is off"
+	}
+	return ""
+}
+
+// DefaultTalkootWakeDelay is the longest delay of a wake when the
+// talkoot_wakes key names none.
+const DefaultTalkootWakeDelay = 24 * time.Hour
+
+// TalkootWakePolicy is the talkoot_wakes key as the daemon applies it.
+type TalkootWakePolicy struct {
+	// On reports whether a member may set a wake.
+	On bool
+	// PerMember caps the open wakes of one member.
+	PerMember int
+	// MaxDelay caps the delay of one wake.
+	MaxDelay time.Duration
+	// Problem says why the key is set and wakes are still off. It is empty
+	// when the key is unset, and when wakes are on.
+	Problem string
+}
+
+// TalkootWakes reads the talkoot_wakes key from the user layer. Read live per
+// call, so an edit applies to the next wake without a restart.
+//
+// 🚨 Every doubt reads as off. A cap that does not parse must not become no
+// cap, so a bad max_delay turns wakes off and Problem says why.
+func TalkootWakes() TalkootWakePolicy {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.TalkootWakes == nil {
+		return TalkootWakePolicy{}
+	}
+	if cfg.TalkootEnabled == nil || !*cfg.TalkootEnabled {
+		return TalkootWakePolicy{Problem: "talkoot_wakes is set, and talkoot_enabled is off"}
+	}
+	return talkootWakePolicy(*cfg.TalkootWakes)
+}
+
+func talkootWakePolicy(c TalkootWakesConfig) TalkootWakePolicy {
+	if c.PerMember < 1 {
+		return TalkootWakePolicy{Problem: fmt.Sprintf("talkoot_wakes.per_member is %d, and wakes need 1 or more", c.PerMember)}
+	}
+	max := DefaultTalkootWakeDelay
+	if c.MaxDelay != "" {
+		d, err := time.ParseDuration(c.MaxDelay)
+		if err != nil || d < time.Minute {
+			return TalkootWakePolicy{Problem: fmt.Sprintf("talkoot_wakes.max_delay %q is not a duration of one minute or more, such as 90m or 24h", c.MaxDelay)}
+		}
+		max = d
+	}
+	return TalkootWakePolicy{On: true, PerMember: c.PerMember, MaxDelay: max}
+}
+
+// The top of each limit of a routine. A member's ask and a default of a kind
+// have the same top, so every default is a value that a routine can store.
+// packages/agent/talkoot names these for a routine.
+const (
+	TalkootRoutineMaxFollowUps      = 100
+	TalkootRoutineMaxReviewsPerDay  = 1000
+	TalkootRoutineMaxSpendUSDPerDay = 10000
+	TalkootRoutineMaxEnd            = 100000
+)
+
+// TalkootRoutineDefaults holds the defaults of one kind of routine: the six
+// limits that a card hides when a routine does not change them.
+type TalkootRoutineDefaults struct {
+	// EndAfterRuns and EndAfterDays are the end condition. Zero is no end.
+	EndAfterRuns   int
+	EndAfterDays   int
+	SpendUSDPerDay float64
+	ReviewsPerDay  int
+	FollowUps      int
+	// CatchUp says whether a missed window gets one late run.
+	CatchUp bool
+}
+
+// The kinds of a routine, as packages/agent/talkoot names them.
+const (
+	routineWatcher = "watcher"
+	routineBrief   = "brief"
+	routineTask    = "task"
+)
+
+// builtinRoutineDefaults are the defaults of a kind that the user
+// configuration leaves out.
+//
+// 🔑 A watcher and a task catch up, and a brief does not. A check that the
+// daemon missed still has to run one time. A brief that arrives six hours
+// late is worse than no brief (decision 0029 rule 7).
+//
+// Only a task asks for a review or sets a follow-up by default. No kind has
+// an end by default, because a person deletes a routine from its list.
+var builtinRoutineDefaults = map[string]TalkootRoutineDefaults{
+	routineWatcher: {SpendUSDPerDay: 1, CatchUp: true},
+	routineBrief:   {SpendUSDPerDay: 1},
+	routineTask:    {SpendUSDPerDay: 5, ReviewsPerDay: 2, FollowUps: 2, CatchUp: true},
+}
+
+// TalkootRoutinePolicy says whether a talkoot member may ask for a routine,
+// and the defaults of each kind.
+type TalkootRoutinePolicy struct {
+	On bool
+	// Max caps the routines of one talkoot.
+	Max int
+	// Kinds holds the defaults of every kind, the built-in ones filled in.
+	Kinds map[string]TalkootRoutineDefaults
+	// QuestionWait is how long a question waits for a person in a chain
+	// that a routine began. Read it through Wait, which has a value when
+	// routines are off too. A key with a problem in another field keeps the
+	// wait that it set.
+	QuestionWait time.Duration
+	// MergeCommands and ProtectedBranches add to the merge rule of a chain
+	// that no person began. As the wait, they have their values when
+	// routines are off, and beside a problem in another field.
+	MergeCommands     []*regexp.Regexp
+	ProtectedBranches []string
+	// ReviewCommands name the commands that ask for a model review. A chain
+	// of a routine counts each one against the routine's reviews for one
+	// day. They are kept as the merge rule's patterns are.
+	ReviewCommands []*regexp.Regexp
+	// Problem says why the key is set and routines are still off. It is
+	// empty when the key is unset, and when routines are on.
+	Problem string
+}
+
+// The wait for a person in a chain that a routine began: the default, and the
+// two ends of what the key may set.
+//
+// The default covers an evening away from the chat. A run that waits holds
+// its routine, so the default also leaves a routine with one run a day free
+// before its next time.
+const (
+	DefaultTalkootQuestionWait = 4 * time.Hour
+	MinTalkootQuestionWait     = time.Minute
+	MaxTalkootQuestionWait     = 7 * 24 * time.Hour
+)
+
+// Wait returns how long a question waits for a person in a chain that a
+// routine began.
+//
+// 🔑 It has a value when routines are off. A person can turn routines off
+// while a chain of one still works, and that chain's question still needs a
+// deadline.
+func (p TalkootRoutinePolicy) Wait() time.Duration {
+	if p.QuestionWait > 0 {
+		return p.QuestionWait
+	}
+	return DefaultTalkootQuestionWait
+}
+
+// TalkootRoutines reads the talkoot_routines key from the user layer. Read
+// live per call, so an edit applies to the next card without a restart.
+//
+// 🚨 Every doubt reads as off. A default is authority that a card hides, so a
+// kind the daemon does not know, or a negative limit, turns routines off and
+// Problem says why. It never becomes a built-in default in silence.
+func TalkootRoutines() TalkootRoutinePolicy {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.TalkootRoutines == nil {
+		return TalkootRoutinePolicy{}
+	}
+	if cfg.TalkootEnabled == nil || !*cfg.TalkootEnabled {
+		return TalkootRoutinePolicy{Problem: "talkoot_routines is set, and talkoot_enabled is off"}
+	}
+	return talkootRoutinePolicy(*cfg.TalkootRoutines)
+}
+
+func talkootRoutinePolicy(c TalkootRoutinesConfig) (p TalkootRoutinePolicy) {
+	// 🚨 The merge rule's patterns and the wait are read first, and they stay
+	// beside a problem in any other field. A chain of a routine can still
+	// work while the key turns routines off. A person who set a pattern or a
+	// short wait and then mistyped a limit must not lose either in silence.
+	// A pattern that does not compile turns routines off, and every pattern
+	// that does compile still binds a chain at work.
+	var merges, reviews []*regexp.Regexp
+	var branches []string
+	problem := ""
+	for _, pat := range c.MergeCommands {
+		re, err := regexp.Compile(pat)
+		if err != nil || strings.TrimSpace(pat) == "" {
+			problem = fmt.Sprintf("talkoot_routines.merge_commands holds %q, and it is not a pattern that compiles", pat)
+			continue
+		}
+		merges = append(merges, re)
+	}
+	for _, pat := range c.ProtectedBranches {
+		if _, err := path.Match(pat, ""); err != nil || strings.TrimSpace(pat) == "" {
+			problem = fmt.Sprintf("talkoot_routines.protected_branches holds %q, and it is not a branch name or a pattern such as release/*", pat)
+			continue
+		}
+		branches = append(branches, pat)
+	}
+	for _, pat := range c.ReviewCommands {
+		re, err := regexp.Compile(pat)
+		if err != nil || strings.TrimSpace(pat) == "" {
+			problem = fmt.Sprintf("talkoot_routines.review_commands holds %q, and it is not a pattern that compiles", pat)
+			continue
+		}
+		reviews = append(reviews, re)
+	}
+	wait := DefaultTalkootQuestionWait
+	defer func() {
+		p.QuestionWait, p.MergeCommands, p.ProtectedBranches, p.ReviewCommands = wait, merges, branches, reviews
+	}()
+	if c.QuestionWait != "" {
+		d, err := time.ParseDuration(c.QuestionWait)
+		if err != nil || d < MinTalkootQuestionWait || d > MaxTalkootQuestionWait {
+			return TalkootRoutinePolicy{Problem: fmt.Sprintf("talkoot_routines.question_wait %q is not a duration from one minute to 7 days, such as 90m or 8h", c.QuestionWait)}
+		}
+		wait = d
+	}
+	if problem != "" {
+		return TalkootRoutinePolicy{Problem: problem}
+	}
+	if c.Max < 1 {
+		return TalkootRoutinePolicy{Problem: fmt.Sprintf("talkoot_routines.max is %d, and routines need 1 or more", c.Max)}
+	}
+	kinds := make(map[string]TalkootRoutineDefaults, len(builtinRoutineDefaults))
+	for kind, d := range builtinRoutineDefaults {
+		kinds[kind] = d
+	}
+	for kind, k := range c.Kinds {
+		d, ok := kinds[kind]
+		if !ok {
+			return TalkootRoutinePolicy{Problem: fmt.Sprintf("talkoot_routines.kinds names %q, and the kinds are watcher, brief and task", kind)}
+		}
+		// 🚨 A default has the top that an ask has. An approval gives a
+		// routine each default that its ask left out. A default above the
+		// top would store a routine that no later read accepts.
+		for _, n := range []struct {
+			field string
+			from  *int
+			to    *int
+			max   int
+		}{
+			{"end_after_runs", k.EndAfterRuns, &d.EndAfterRuns, TalkootRoutineMaxEnd},
+			{"end_after_days", k.EndAfterDays, &d.EndAfterDays, TalkootRoutineMaxEnd},
+			{"reviews_per_day", k.ReviewsPerDay, &d.ReviewsPerDay, TalkootRoutineMaxReviewsPerDay},
+			{"follow_ups", k.FollowUps, &d.FollowUps, TalkootRoutineMaxFollowUps},
+		} {
+			if n.from == nil {
+				continue
+			}
+			if *n.from < 0 || *n.from > n.max {
+				return TalkootRoutinePolicy{Problem: fmt.Sprintf("talkoot_routines.kinds.%s.%s is %d, and it must be from 0 to %d", kind, n.field, *n.from, n.max)}
+			}
+			*n.to = *n.from
+		}
+		if v := k.SpendUSDPerDay; v != nil {
+			// The comparison is written so that a value which is no number
+			// fails it too.
+			if !(*v >= 0 && *v <= TalkootRoutineMaxSpendUSDPerDay) {
+				return TalkootRoutinePolicy{Problem: fmt.Sprintf("talkoot_routines.kinds.%s.spend_usd_per_day is %v, and it must be from 0 to %d", kind, *v, TalkootRoutineMaxSpendUSDPerDay)}
+			}
+			d.SpendUSDPerDay = *v
+		}
+		if k.CatchUp != nil {
+			d.CatchUp = *k.CatchUp
+		}
+		kinds[kind] = d
+	}
+	return TalkootRoutinePolicy{On: true, Max: c.Max, Kinds: kinds}
 }
 
 // TalkootEnabled reads the talkoot_enabled flag from the user layer. Read live

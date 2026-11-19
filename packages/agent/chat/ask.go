@@ -107,28 +107,12 @@ func (a *ChatAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.Use
 
 	out := make([]core.UserAnswer, len(qs))
 	for i, q := range qs {
-		opts := make([]AskOption, len(q.Options))
-		for j, o := range q.Options {
-			// Key is the 1-based position so it agrees with the number the
-			// text fallback prints; matchAskOption accepts the number, the
-			// key or the label, so every reply shape lands on the same key.
-			opts[j] = AskOption{Key: strconv.Itoa(j + 1), Label: o, Recommended: q.OptionRecommended(o)}
-		}
-
-		ans, err := l.Ask(ctx, Ask{
-			ChatID: chatID, ReplyTo: replyTo,
-			Text:        askText(q, i, len(qs)),
-			Options:     opts,
-			MultiSelect: q.MultiSelect,
-			// A question with no options at all is free-form by definition
-			// (core.UserQuestion), so it needs the written-in path whether or
-			// not the model set the flag — otherwise it would be posed with
-			// nothing to answer it with.
-			AllowCustom:    q.AllowCustom || len(q.Options) == 0,
-			Timeout:        a.Timeout,
-			RestrictTo:     restrict,
-			TimeoutOutcome: i18n.T("no answer — the agent will decide for itself"),
-		})
+		ask := questionAsk(q, i, len(qs))
+		ask.ChatID, ask.ReplyTo = chatID, replyTo
+		ask.Timeout = a.Timeout
+		ask.RestrictTo = restrict
+		ask.TimeoutOutcome = i18n.T("no answer — the agent will decide for itself")
+		ans, err := l.Ask(ctx, ask)
 		switch {
 		case errors.Is(err, ErrAskTimeout):
 			// Nobody is there. Decline this question AND every one after it
@@ -148,6 +132,30 @@ func (a *ChatAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.Use
 		out[i] = answerFor(q, ans)
 	}
 	return out, nil
+}
+
+// questionAsk turns question i of n into the connector's Ask: the text and the
+// options, with no chat, no timeout, and no responder yet. ChatAsker and
+// Bridge.AskQuestions both build from it, so an option's key means the same
+// thing to answerFor whichever of them posed the question.
+func questionAsk(q core.UserQuestion, i, n int) Ask {
+	opts := make([]AskOption, len(q.Options))
+	for j, o := range q.Options {
+		// Key is the 1-based position so it agrees with the number the
+		// text fallback prints; matchAskOption accepts the number, the
+		// key or the label, so every reply shape lands on the same key.
+		opts[j] = AskOption{Key: strconv.Itoa(j + 1), Label: o, Recommended: q.OptionRecommended(o)}
+	}
+	return Ask{
+		Text:        askText(q, i, n),
+		Options:     opts,
+		MultiSelect: q.MultiSelect,
+		// A question with no options at all is free-form by definition
+		// (core.UserQuestion), so it needs the written-in path whether or
+		// not the model set the flag — otherwise it would be posed with
+		// nothing to answer it with.
+		AllowCustom: q.AllowCustom || len(q.Options) == 0,
+	}
 }
 
 // askText renders one question, with its position when there are several so a

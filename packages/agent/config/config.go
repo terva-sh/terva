@@ -188,6 +188,14 @@ type Config struct {
 	// 3), and a cloned repository must not turn that on.
 	TalkootEnabled *bool `json:"talkoot_enabled,omitempty"`
 
+	// TalkootChat binds one chat connector's direct room to one talkoot, so a
+	// person reaches the team's coordinator from a phone (decision 0029 rule
+	// 18). Unset means no bridge. User layer only, with no ProjectConfig
+	// counterpart, for the reason TalkootEnabled has none: the key lets a chat
+	// account post to a team as a person, and a cloned repository must not
+	// choose who that is.
+	TalkootChat *TalkootChatConfig `json:"talkoot_chat,omitempty"`
+
 	// AutoSwarmNudge controls whether, when auto-swarm is enabled, the system
 	// prompt carries the proactive-delegation guidance (the swarm addendum).
 	// Independent of AutoSwarmEnabled: the tool availability is one toggle, the
@@ -603,6 +611,26 @@ type ProviderSettings struct {
 	// A keyword and not a bool, so an unset provider is distinguishable from one
 	// set to false. An unrecognized word inherits the global.
 	ActivationContinuation string `json:"activation_continuation,omitempty"`
+}
+
+// TalkootChatConfig is the talkoot_chat key: which talkoot a chat connector's
+// direct room serves, and who the owner is in that team's room.
+type TalkootChatConfig struct {
+	// Talkoot is the team's id, the directory name under $TERVA_HOME/talkoot.
+	Talkoot string `json:"talkoot"`
+	// Connector names a configured chat connector, as `terva bot setup
+	// --connector` knows it. Empty means the default connector.
+	Connector string `json:"connector,omitempty"`
+	// Person is the name the owner's posts carry in the room, the same name
+	// the Talkoot app asks for.
+	Person string `json:"person"`
+	// Brief holds the times of day at which the bridge sends the updates it
+	// held, such as "07:30". With none, they go out when the owner next
+	// writes.
+	Brief []string `json:"brief,omitempty"`
+	// Quiet is the range in which the bridge holds everything except a
+	// question and a reply, such as "22:00-07:00".
+	Quiet string `json:"quiet,omitempty"`
 }
 
 // EndpointConfig defines one user-supplied backend. The provider id is the map

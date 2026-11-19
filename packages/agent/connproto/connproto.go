@@ -289,6 +289,14 @@ type ReactionFromConn struct {
 // text, reaction streams; also the default when empty). The host
 // re-filters restrict_to regardless — the wire contract is answers-
 // only-from, enforced twice.
+//
+// DeviceTrust (feature "device_trust") answers a second question.
+// Attestation says which account answered. DeviceTrust says whether the
+// answer came from a device that the account's own identity has signed.
+// 🚨 Absent means unverified, and so does any value this host does not
+// know. A session token copied from an unverified login produces an
+// attested answer, so a host that gives authority on an answer must
+// read DeviceTrust and not Attestation.
 type AnswerFromConn struct {
 	Type        string `json:"type"` // "answer"
 	AskID       string `json:"ask_id"`
@@ -296,6 +304,7 @@ type AnswerFromConn struct {
 	UserID      string `json:"user_id"`
 	Username    string `json:"username,omitempty"`
 	Attestation string `json:"attestation,omitempty"`
+	DeviceTrust string `json:"device_trust,omitempty"`
 }
 
 // Attestation grades carried on answer frames.
@@ -303,6 +312,16 @@ const (
 	AttestationAttested   = "attested"
 	AttestationBestEffort = "best_effort"
 )
+
+// FeatureDeviceTrust is the feature string a connector declares when it
+// can prove which device answered. A host reads DeviceTrust only from a
+// connector that declared it.
+const FeatureDeviceTrust = "device_trust"
+
+// DeviceTrustVerified is the one DeviceTrust value that carries a claim.
+// A connector sends it only when the platform's cryptography proves that
+// the answer came from a device the answering user's identity has signed.
+const DeviceTrustVerified = "verified"
 
 // ---- host → connector ----
 

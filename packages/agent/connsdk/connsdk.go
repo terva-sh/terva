@@ -321,12 +321,21 @@ type Ask struct {
 // the PLATFORM is about who answered: AttestationAttested for
 // server-proven identity (button interactions, callback queries),
 // AttestationBestEffort for parsed text or reaction streams.
+//
+// DeviceTrust says which device answered (protocol 2, feature
+// "device_trust"; declare it in Capabilities.Features). Set it to
+// DeviceTrustVerified only when the platform's cryptography proves that
+// the answer came from a device the answering user's own identity has
+// signed. Leave it empty in every other case. The host reads empty as
+// unverified. The value exists so that a host can refuse an answer that
+// gives authority unless a verified device sent it.
 type Answer struct {
 	AskID       string
 	Key         string
 	UserID      string
 	Username    string
 	Attestation string
+	DeviceTrust string
 }
 
 // Attestation grades for Answer.
@@ -334,6 +343,9 @@ const (
 	AttestationAttested   = "attested"
 	AttestationBestEffort = "best_effort"
 )
+
+// DeviceTrustVerified is the one DeviceTrust value that carries a claim.
+const DeviceTrustVerified = "verified"
 
 // SpeakerSender is the optional Transport upgrade for alternate
 // outbound identities (declare "speaker:full" or "speaker:name_only"
@@ -933,6 +945,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 							Type: "answer", AskID: f.ID, Key: ans.Key,
 							UserID: ans.UserID, Username: ans.Username,
 							Attestation: ans.Attestation,
+							DeviceTrust: ans.DeviceTrust,
 						})
 					})
 					return err

@@ -822,19 +822,7 @@ func (l *Loop) textFallbackAsk(ctx context.Context, a Ask) (Answer, error) {
 		l.mu.Unlock()
 	}()
 
-	var b strings.Builder
-	b.WriteString(a.Text)
-	b.WriteString("\n")
-	for i, o := range a.Options {
-		label := o.Label
-		if o.Recommended {
-			label += " (" + i18n.T("recommended") + ")"
-		}
-		fmt.Fprintf(&b, "\n%d — %s", i+1, label)
-	}
-	b.WriteString("\n\n")
-	b.WriteString(askReplyInstruction(a))
-	if err := l.Connector.Send(ctx, Outgoing{ChatID: a.ChatID, ReplyTo: a.ReplyTo, Text: b.String()}); err != nil {
+	if err := l.Connector.Send(ctx, Outgoing{ChatID: a.ChatID, ReplyTo: a.ReplyTo, Text: renderTextAsk(a)}); err != nil {
 		return Answer{}, err
 	}
 
@@ -853,6 +841,25 @@ func (l *Loop) textFallbackAsk(ctx context.Context, a Ask) (Answer, error) {
 	case <-ctx.Done():
 		return Answer{}, ctx.Err()
 	}
+}
+
+// renderTextAsk is the text floor's question: the text, the numbered options,
+// and the reply instruction. The Loop and the Bridge both pose it, so the two
+// floors cannot drift apart on what a number means.
+func renderTextAsk(a Ask) string {
+	var b strings.Builder
+	b.WriteString(a.Text)
+	b.WriteString("\n")
+	for i, o := range a.Options {
+		label := o.Label
+		if o.Recommended {
+			label += " (" + i18n.T("recommended") + ")"
+		}
+		fmt.Fprintf(&b, "\n%d — %s", i+1, label)
+	}
+	b.WriteString("\n\n")
+	b.WriteString(askReplyInstruction(a))
+	return b.String()
 }
 
 // askReplyInstruction tells the responder what shape of reply this ask

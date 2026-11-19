@@ -3,10 +3,14 @@
 Running terva unattended on a timer: a check every ten minutes, a report every
 morning, a follow-up in two days.
 
-terva has no scheduler and does not need one. A scheduled job is an ordinary
-headless run under `systemd`, `cron` or `launchd`, and everything it needs
-already exists. This page is the recipe and, more importantly, the three rules
-that keep an unattended agent from quietly wasting money or quietly going blind.
+A scheduled job needs no scheduler from terva. It is an ordinary headless run
+under `systemd`, `cron` or `launchd`, and everything it needs already exists.
+This page is the recipe and, more importantly, the three rules that keep an
+unattended agent from quietly wasting money or quietly going blind.
+
+The `terva web` daemon also keeps timers of its own, for work that the daemon
+starts by itself. Those are a different thing, and
+[the last section](#the-daemons-timer-service) says how they differ.
 
 For a terva process that runs *continuously*, a chat bot or a connector, see
 [deploy.md](deploy.md) instead. This page is for work that happens on a
@@ -245,6 +249,51 @@ If you only need to wait for something during a single conversation, do not
 reach for a timer. Run the command in the foreground and let `bash` block. A
 timer that fires every ten minutes to answer a question you are sitting there
 waiting for is slower, costlier and harder to read than simply waiting.
+
+## The daemon's timer service
+
+The `terva web` and `terva member` daemons hold a timer service. It belongs to
+the daemon and not to you: a part of the daemon sets a timer for work it will
+start by itself. Its first use is a team's chat bridge, which sets one timer
+for its brief and one for the end of quiet hours
+([talkoot.md](talkoot.md#when-the-team-writes-to-you)). The service is also
+the base for an agent team that wakes itself. Decision record 0029,
+"Unattended wakes", describes that plan.
+
+Use the recipe on this page for a job of your own. A system timer starts a
+fresh process with nothing left over from the last run. A daemon timer fires
+inside a process that is already running, and only while it runs.
+
+The service keeps three promises, and each one answers a way that a timer in a
+long-lived process goes wrong.
+
+- **A restart keeps every timer.** The timers live in a file under
+  `$TERVA_HOME/timers/`, one directory for each directory a daemon runs in. A
+  timer whose time passed while the daemon was down fires once at the next
+  start.
+- **A gap never replays.** A daemon that was down for a fortnight does not run
+  fourteen morning jobs when it starts. A recurring timer fires once, for the
+  latest window, and tells its owner how many windows passed. A suspended
+  laptop and a corrected clock get the same answer.
+- **A crash loses no firing.** The service records a firing before it starts
+  the work and clears the record after. A daemon that dies between the two
+  delivers the firing again at the next start, marked as a second delivery.
+
+A clock that moves back delays a timer and never repeats one. A timer that the
+file cannot record does not fire, because a daemon that crashes in a loop on a
+full disk would otherwise fire the same window at every start.
+
+A time of day that a clock change skips fires at the moment of the change, and
+never before the time you wrote. A timer whose zone the machine does not know
+waits and says so. It does not fire at that hour in some other zone.
+
+Two daemons in one directory do not share the timers. The first one holds
+them, and the second one fires nothing and says why.
+
+To see what a daemon will do by itself, open the **Timers** pane in the web
+app. It appears once the daemon holds a timer, and it lists each one with its
+schedule and its next time. A controller reads the same list with the
+[`timers.list`](controllers.md) verb.
 
 ## See also
 

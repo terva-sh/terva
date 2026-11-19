@@ -139,6 +139,9 @@ type TalkootSummary struct {
 	// so a list that reads again on that event follows it. A talkoot that
 	// has just started may have none yet.
 	State string `json:"state,omitempty"`
+	// Chat is the chat bridge bound to this talkoot, when it has one. Its
+	// changes send talkoots_changed too.
+	Chat *ChatBridgeState `json:"chat,omitempty"`
 }
 
 // TalkootListResult is the talkoot.list reply.
@@ -175,6 +178,10 @@ type TalkootView struct {
 	// Held names each member with a delivery that waits for a resume or a
 	// working slot.
 	Held []string `json:"held,omitempty"`
+	// Chat is the chat bridge that serves this talkoot, when the daemon runs
+	// one: the connector, its state, and the account it paired with. It is
+	// unset when no bridge serves the team.
+	Chat *ChatBridgeState `json:"chat,omitempty"`
 }
 
 // TalkootMember is one member: what the roster says, and what the router

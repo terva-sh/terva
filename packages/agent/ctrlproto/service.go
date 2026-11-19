@@ -886,6 +886,9 @@ type ChatView struct {
 	// none. Nonzero disables connect: two consumers race each update and one
 	// always loses, so messages arrive half-delivered.
 	DaemonPID int `json:"daemon_pid,omitempty"`
+	// Problem says why a talkoot_chat key that is set starts no bridge. It
+	// is empty when the key is unset, and when the key is in use.
+	Problem string `json:"problem,omitempty"`
 }
 
 // ChatServiceInfo is one registered chat service, with the provenance a picker

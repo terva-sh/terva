@@ -17,6 +17,7 @@ import { TalkootComposer } from '../../ui/talkoot/TalkootComposer'
 import { PersonInput, TeamColor } from '../../ui/talkoot/TalkootScreen'
 import { loadSeen, MotionPicker, orderMembers, PRESENCE_LABEL, saveSeen } from '../../ui/talkoot/TalkootTeam'
 import { TeamBudget } from '../../ui/talkoot/TeamBudget'
+import { TeamChat } from '../../ui/talkoot/TeamChat'
 import { SaveTemplate } from '../../ui/talkoot/SaveTemplate'
 import { Recruit } from '../../ui/talkoot/Recruit'
 import { useTalkoot } from '../../ui/talkoot/useTalkoot'
@@ -199,6 +200,7 @@ export function TeamView({
               <section class="tka-section tka-foot">
                 <span class="talkoot-spend">{t('Today: $%s', spend.toFixed(2))}</span>
                 {view && <TeamBudget client={client} view={view} person={person} canSteer={canSteer} onError={setActionError} />}
+                <TeamChat chat={team.chat} />
                 <SaveTemplate client={client} id={id} onError={setActionError} />
                 {canSteer && <Recruit key={id} client={client} id={id} onError={setActionError} />}
                 {canSteer && (

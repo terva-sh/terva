@@ -2374,6 +2374,8 @@ export interface ChatView {
   bridge: ChatBridgeState
   // A `terva bot` daemon already polling this service; connect is refused.
   daemon_pid?: number
+  // Why a talkoot_chat key that is set starts no bridge.
+  problem?: string
 }
 
 // WireStall / WireEscalation are the payloads of the stuck-loop hatch's live

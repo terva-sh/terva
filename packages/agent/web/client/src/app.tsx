@@ -4551,6 +4551,8 @@ export function ChatBody({
         </div>
       ) : null}
 
+      {v.problem ? <div class="pane-note">{t('No chat bridge for a team: %s', v.problem)}</div> : null}
+
       {v.daemon_pid ? (
         <div class="pane-note">
           {t('a terva bot daemon is running (pid %s) — stop it before connecting', String(v.daemon_pid))}

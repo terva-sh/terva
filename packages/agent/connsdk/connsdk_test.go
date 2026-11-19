@@ -587,11 +587,17 @@ func TestServeAsk(t *testing.T) {
 	// pipe until next() below starts reading.
 	go func() {
 		tr.deliver(Answer{AskID: "a1", Key: "approve", UserID: "intruder"})
-		tr.deliver(Answer{AskID: "spoofed", Key: "approve", UserID: "u1", Username: "drew", Attestation: AttestationAttested})
+		tr.deliver(Answer{AskID: "spoofed", Key: "approve", UserID: "u1", Username: "drew",
+			Attestation: AttestationAttested, DeviceTrust: DeviceTrustVerified})
 	}()
 	ans := h.next("answer")
 	if ans["ask_id"] != "a1" || ans["key"] != "approve" || ans["user_id"] != "u1" || ans["attestation"] != "attested" {
 		t.Errorf("answer = %v", ans)
+	}
+	// The transport's claim about the device reaches the wire as it was
+	// made. The host decides what the claim is worth.
+	if ans["device_trust"] != "verified" {
+		t.Errorf("answer = %v, want the transport's device trust on the frame", ans)
 	}
 
 	h.send(connproto.AskCloseFromHost{Type: "ask_close", ID: "a2", AskID: "a1", Outcome: "Approve — @drew"})

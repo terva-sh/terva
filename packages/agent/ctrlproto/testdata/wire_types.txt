@@ -247,6 +247,7 @@ ChatView
 	services	[]ChatServiceInfo	omitempty
 	bridge	ChatBridgeState
 	daemon_pid	int	omitempty
+	problem	string	omitempty
 CommandEntry
 	ext	string
 	name	string
