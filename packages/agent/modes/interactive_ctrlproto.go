@@ -248,7 +248,7 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	// history), and decides that snapshot's first-paint tail cap.
 	i.carrierMessages = nil
 	i.carrierMessagesRev++
-	i.carrierQueued = nil
+	i.carrierQueued, i.carrierQueuedSources = nil, nil
 	// The recall log joins to THIS thread's tail (inputHistory counts its
 	// in-thread entries off the transcript). Against another session's
 	// transcript that count is meaningless and would hide the tail of the
@@ -573,7 +573,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			return
 		}
 		i.setCarrierTranscript(ev.Snapshot.Messages)
-		i.setCarrierQueue(ev.Snapshot.Queued)
+		i.setCarrierQueue(ev.Snapshot.Queued, ev.Snapshot.QueuedSources)
 		i.seedSessionMeters(ev.Snapshot.Session)
 		i.noteSessionMeta(ev.Snapshot.Session)
 		// The transcript was replaced, so the context gauge describing the OLD
@@ -701,7 +701,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// enqueue at a turn boundary, the post-turn shift, a drop on failure,
 		// and any client's SetQueue. Mirror it; the pump's invalidate repaints
 		// the "sliding in" chips.
-		i.setCarrierQueue(ev.Queued)
+		i.setCarrierQueue(ev.Queued, ev.QueuedSources)
 	case ctrlproto.EventLocaleChanged:
 		// A Stage-3 consumer. The pump's invalidate already repaints.
 	default:
@@ -716,7 +716,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 func (i *Interactive) startTurnCarrier(parent context.Context, prompt string, images []provider.ImageBlock) {
 	c, sess := i.cfg.Carrier, i.carrierSession()
 	if !i.turns.claimCarrier(i.carrierCancel()) {
-		if err := c.Queue(parent, sess, prompt); err != nil {
+		if err := c.Queue(parent, sess, ctrlproto.QueueParams{Text: prompt}); err != nil {
 			i.setStatusErr(err.Error())
 		}
 		i.invalidate()
@@ -735,7 +735,7 @@ func (i *Interactive) startTurnCarrier(parent context.Context, prompt string, im
 			i.turns.releaseCarrier()
 			var ce *ctrlproto.Error
 			if errors.As(err, &ce) && ce.Code == ctrlproto.CodeBusy {
-				_ = c.Queue(parent, sess, prompt)
+				_ = c.Queue(parent, sess, ctrlproto.QueueParams{Text: prompt})
 			} else {
 				i.setStatusErr(err.Error())
 			}
@@ -1675,17 +1675,38 @@ func (i *Interactive) setReadyLocked(v bool) { i.carrierReady = v }
 
 // setCarrierQueue replaces the mirrored queue from a snapshot or a
 // queue_updated event.
-func (i *Interactive) setCarrierQueue(texts []string) {
+//
+// sources names the writer of each text by position. A list of another length
+// is not this queue's list, so the mirror then reads every entry as typed.
+func (i *Interactive) setCarrierQueue(texts, sources []string) {
+	if len(sources) != len(texts) {
+		sources = nil
+	}
 	i.mu.Lock()
 	i.carrierQueued = append([]string(nil), texts...)
+	i.carrierQueuedSources = append([]string(nil), sources...)
 	i.mu.Unlock()
 }
 
+// queuedChip is one mirrored queue entry for the render pass. source is empty
+// for a text that a person typed.
+type queuedChip struct {
+	text   string
+	source string
+}
+
 // carrierQueuedList copies the mirrored queue for the render pass.
-func (i *Interactive) carrierQueuedList() []string {
+func (i *Interactive) carrierQueuedList() []queuedChip {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return append([]string(nil), i.carrierQueued...)
+	out := make([]queuedChip, len(i.carrierQueued))
+	for n, text := range i.carrierQueued {
+		out[n].text = text
+		if n < len(i.carrierQueuedSources) {
+			out[n].source = i.carrierQueuedSources[n]
+		}
+	}
+	return out
 }
 
 // carrierQueuedCount reports how many prompts wait for a turn slot.
@@ -1701,7 +1722,7 @@ func (i *Interactive) clearCarrierQueue() {
 	if i.carrierQueuedCount() == 0 {
 		return
 	}
-	if err := i.cfg.Carrier.SetQueue(context.Background(), i.carrierSession(), nil); err != nil {
+	if err := i.cfg.Carrier.SetQueue(context.Background(), i.carrierSession(), ctrlproto.QueueSetParams{}); err != nil {
 		i.setStatusErr(err.Error())
 	}
 }
@@ -1709,15 +1730,37 @@ func (i *Interactive) clearCarrierQueue() {
 // popCarrierQueue peels the most recently queued prompt off the tail and
 // returns it, so alt+up can put it back in the editor. The mirror gives the
 // text; SetQueue commits the shortened list, and its broadcast reconciles.
+//
+// It takes the newest text that a person typed. A text that terva queued is
+// not the person's draft, so it stays in the queue, in its place.
 func (i *Interactive) popCarrierQueue() (string, bool) {
 	i.mu.Lock()
-	n := len(i.carrierQueued)
-	if n == 0 {
+	at := -1
+	for n := len(i.carrierQueued) - 1; n >= 0; n-- {
+		if n >= len(i.carrierQueuedSources) || i.carrierQueuedSources[n] == "" {
+			at = n
+			break
+		}
+	}
+	if at < 0 {
 		i.mu.Unlock()
 		return "", false
 	}
-	text := i.carrierQueued[n-1]
-	rest := append([]string(nil), i.carrierQueued[:n-1]...)
+	text := i.carrierQueued[at]
+	// 🔑 The sources go back with the texts. They say which entries stay, so
+	// that a recap whose text equals the popped one keeps its writer.
+	var rest ctrlproto.QueueSetParams
+	for n, queued := range i.carrierQueued {
+		if n == at {
+			continue
+		}
+		source := ""
+		if n < len(i.carrierQueuedSources) {
+			source = i.carrierQueuedSources[n]
+		}
+		rest.Texts = append(rest.Texts, queued)
+		rest.Sources = append(rest.Sources, source)
+	}
 	i.mu.Unlock()
 
 	if err := i.cfg.Carrier.SetQueue(context.Background(), i.carrierSession(), rest); err != nil {

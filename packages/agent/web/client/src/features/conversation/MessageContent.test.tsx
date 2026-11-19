@@ -105,6 +105,12 @@ describe('MessageContent', () => {
 
     const system = show({ kind: 'system', id: 's1', text: 'continue' })
     expect(system.container.querySelector('.sys-note .sys-tag')?.textContent).toBe('auto')
+
+    // A text that terva queued names its writer in place of "auto", and it
+    // keeps its own lines apart from the tag.
+    const sourced = show({ kind: 'system', id: 's2', text: 'line one\nline two', source: 'swarm:recap' })
+    expect(sourced.container.querySelector('.sys-note.sourced .sys-tag')?.textContent).toBe('from terva · sub-agent report')
+    expect(sourced.container.querySelector('.sys-note.sourced .sys-body')?.textContent).toBe('line one\nline two')
     cleanup()
 
     const notice = show({ kind: 'notice', id: 'n1', level: 'error', ext: 'calendar', text: 'unavailable' })

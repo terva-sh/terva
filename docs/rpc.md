@@ -376,11 +376,14 @@ Used by `get_messages` and inside `user_message` / `assistant_message` events, w
   "role": "user",
   "content": [<content_block>...],
   "time": "2026-04-19T11:30:00Z",
-  "synthetic": true
+  "synthetic": true,
+  "source": "swarm:recap"
 }
 ```
 
 `synthetic` rides the **event** path only (it is a `core.WireMessage` field): `true` marks a host-injected message (e.g. the at-close continue-on-open-work nudge) rather than one the user typed, so a client can render it as a system note instead of a user bubble; it is omitted when false. `get_messages` serialises the transcript through its own encoder and emits `role`, `content`, and `time` **only**, never `synthetic`. A client that needs the distinction must take it from the live event stream.
+
+`source` rides the event path only as well. It is present on a user message that a person did not type, and it names the part of terva that wrote the text: `swarm:recap` for the report on a batch of sub-agents, and `talkoot:delivery` for a message that a team's room delivered. Unlike a `synthetic` message, a message with a `source` can start a turn. Render it as a note from terva with the source as its label, and render a value you do not know the same way. It is omitted for a message that a person typed.
 
 ### Content block types
 

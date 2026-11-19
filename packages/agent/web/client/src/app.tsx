@@ -114,6 +114,7 @@ import {
   type Window,
 } from './platform/conversation/store'
 import { PACE_INTERVAL_MS, StreamPacer } from './platform/conversation/pacer'
+import { queueSources, withoutEntry } from './platform/conversation/source'
 import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
 import { applyServerCatalog, setLocale, t, tn, tr } from './i18n'
 import { applyScheme, currentScheme, nextScheme, schemeGlyph, schemeName, type Scheme } from './scheme'
@@ -161,6 +162,10 @@ const bootNav = takeNavParams()
 // pump + one snapshot on subscribe; the cap bounds the reconnect snapshot storm
 // on a large workspace. The rest fall back to the periodic list's busy flag.
 const BOARD_SUB_CAP = 16
+
+// One value for every empty queue, so that clearing an empty queue does not
+// make a new state and a render.
+const EMPTY_QUEUE: { texts: string[]; sources: string[] } = { texts: [], sources: [] }
 
 // createClient is the transport seam. App owns the socket's LIFECYCLE — it
 // connects on mount and closes on unmount — so it takes a factory rather than an
@@ -325,7 +330,16 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [wfErr, setWfErr] = useState('')
   const [curInfo, setCurInfo] = useState<SessionInfo | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
-  const [queued, setQueued] = useState<string[]>([])
+  // The pending queue: the texts, and the writer of each one by position ('' is
+  // a text that a person typed). One state value, so that an entry which
+  // leaves one list leaves the other in the same update.
+  const [queue, setQueue] = useState<{ texts: string[]; sources: string[] }>(EMPTY_QUEUE)
+  const queued = queue.texts
+  const queuedSources = queue.sources
+  // The queue as the last render saw it, for a handler that changes it and
+  // tells the daemon in one step.
+  const queueRef = useRef(queue)
+  queueRef.current = queue
   // Whether the daemon advertised the self-restart capability (--web-allow-restart).
   const [canRestart, setCanRestart] = useState(false)
   // Whether the daemon SERVES the secrets group (--web-allow-secrets). A GROUP
@@ -764,7 +778,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     busyRef.current = false
     setBusy(false)
     setCost(0)
-    setQueued([])
+    setQueue(EMPTY_QUEUE)
     setCurInfo(null)
     setInfoOpen(false)
     setSurfaces([])
@@ -797,7 +811,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     busyRef.current = false
     setBusy(false)
     setCost(0)
-    setQueued([])
+    setQueue(EMPTY_QUEUE)
     setCurInfo(null)
     setInfoOpen(false)
     setSurfaces([])
@@ -976,7 +990,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         winRef.current = { epoch: snap.epoch, base, total: snap.total }
         setWin(winRef.current)
         setCurInfo(ev.snapshot?.session ?? null)
-        setQueued(ev.snapshot?.queued ?? [])
+        setQueue({
+          texts: ev.snapshot?.queued ?? [],
+          sources: queueSources(ev.snapshot?.queued, ev.snapshot?.queued_sources),
+        })
         setSkills(ev.snapshot?.skills ?? [])
         if (ev.snapshot?.session?.usage) setCost(ev.snapshot.session.usage.cost_usd || 0)
         // Restore any pending approval/question so a reconnecting tab shows it.
@@ -1001,7 +1018,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       case 'queue_updated':
         // Authoritative queue state from the server — replaces the optimistic
         // list so edits/cancels from any client converge.
-        setQueued(ev.queued ?? [])
+        setQueue({ texts: ev.queued ?? [], sources: queueSources(ev.queued, ev.queued_sources) })
         return
       case 'surfaces_changed':
         // The set of panes changed (ext panel opened/closed, status appeared).
@@ -1074,9 +1091,17 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           .filter((c) => c.type === 'text')
           .map((c) => c.text)
           .join('')
-        setQueued((q) => {
-          const i = q.indexOf(text)
-          return i < 0 ? q : [...q.slice(0, i), ...q.slice(i + 1)]
+        // The entry that left is the one with this text and this source. Two
+        // queued texts can be equal, and the text alone would then drop the
+        // wrong one of them.
+        const source = ev.message?.source ?? ''
+        setQueue((q) => {
+          const i = q.texts.findIndex((queuedText, idx) => queuedText === text && (q.sources[idx] ?? '') === source)
+          if (i < 0) return q
+          return {
+            texts: [...q.texts.slice(0, i), ...q.texts.slice(i + 1)],
+            sources: [...q.sources.slice(0, i), ...q.sources.slice(i + 1)],
+          }
         })
         setItems((it) => applyEvent(it, ev))
         return
@@ -1607,20 +1632,32 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
 
   // Queue edit/cancel: replace the whole pending queue on the server (which
   // re-broadcasts it), and update optimistically for instant feedback.
-  const setQueueList = useCallback((next: string[]) => {
-    setQueued(next)
-    clientRef.current?.fire('queue.set', { texts: next }, curRef.current)
+  //
+  // queue.set carries the source of each text beside it. That says which
+  // entries stay, so the daemon need not guess from the texts, and a report
+  // whose text equals a typed one keeps its writer when the typed one goes.
+  const setQueueList = useCallback((change: (q: { texts: string[]; sources: string[] }) => { texts: string[]; sources: string[] }) => {
+    const next = change(queueRef.current)
+    queueRef.current = next
+    setQueue(next)
+    clientRef.current?.fire('queue.set', next.texts.length ? next : { texts: [] }, curRef.current)
   }, [])
-  const cancelQueued = useCallback(
-    (i: number) => setQueueList(queued.filter((_, idx) => idx !== i)),
-    [queued, setQueueList],
-  )
+  const cancelQueued = useCallback((i: number) => setQueueList((q) => withoutEntry(q, i)), [setQueueList])
   const editQueued = useCallback(
     (i: number, text: string) => {
       const t = text.trim()
-      setQueueList(t ? queued.map((v, idx) => (idx === i ? t : v)) : queued.filter((_, idx) => idx !== i))
+      // A text that the person changed is the person's text, so it has no
+      // source. An empty edit removes the entry.
+      setQueueList((q) =>
+        t
+          ? {
+              texts: q.texts.map((v, idx) => (idx === i ? t : v)),
+              sources: q.sources.map((v, idx) => (idx === i ? '' : v)),
+            }
+          : withoutEntry(q, i),
+      )
     },
-    [queued, setQueueList],
+    [setQueueList],
   )
 
   const openPane = useCallback((id: string) => {
@@ -2758,6 +2795,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 reasoning={reasoning}
                 toolView={toolView}
                 queued={queued}
+                queuedSources={queuedSources}
                 onEditQueued={editQueued}
                 onCancelQueued={cancelQueued}
                 onReveal={revealTurns}

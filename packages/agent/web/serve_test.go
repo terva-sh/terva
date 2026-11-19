@@ -489,11 +489,15 @@ func (f *fakeWS) Prompt(ctx context.Context, sess string, p ctrlproto.PromptPara
 	return nil
 }
 
-func (f *fakeWS) Queue(ctx context.Context, sess, text string) error          { return nil }
-func (f *fakeWS) SetQueue(ctx context.Context, sess string, t []string) error { return nil }
-func (f *fakeWS) Cancel(ctx context.Context, sess string) error               { return nil }
-func (f *fakeWS) Compact(ctx context.Context, sess string) error              { return nil }
-func (f *fakeWS) Clear(ctx context.Context, sess string) error                { return nil }
+func (f *fakeWS) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
+	return nil
+}
+func (f *fakeWS) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
+	return nil
+}
+func (f *fakeWS) Cancel(ctx context.Context, sess string) error  { return nil }
+func (f *fakeWS) Compact(ctx context.Context, sess string) error { return nil }
+func (f *fakeWS) Clear(ctx context.Context, sess string) error   { return nil }
 func (f *fakeWS) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {
 	return nil
 }

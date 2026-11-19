@@ -46,10 +46,10 @@ var dispatch = map[Method]handler{
 		return svc.Prompt(ctx, f.Sess, p)
 	}),
 	MethodQueue: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueParams) error {
-		return svc.Queue(ctx, f.Sess, p.Text)
+		return svc.Queue(ctx, f.Sess, p)
 	}),
 	MethodQueueSet: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueSetParams) error {
-		return svc.SetQueue(ctx, f.Sess, p.Texts)
+		return svc.SetQueue(ctx, f.Sess, p)
 	}),
 	MethodCancel: do(base, func(svc WorkspaceService, ctx context.Context, f Frame) error {
 		return svc.Cancel(ctx, f.Sess)
@@ -475,6 +475,12 @@ var dispatch = map[Method]handler{
 	}),
 	MethodWorkflowsGet: ask(noWorkflows, func(c WorkflowsController, ctx context.Context, f Frame, p WorkflowGetParams) (WorkflowRunView, error) {
 		return c.WorkflowRun(ctx, p)
+	}),
+
+	// ---------------------------------------------------------------------- timers
+
+	MethodTimersList: get(noTimers, func(c TimersController, ctx context.Context, f Frame) (TimersResult, error) {
+		return c.TimerList(ctx)
 	}),
 
 	// ----------------------------------------------------------------- shared files

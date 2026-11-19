@@ -16,6 +16,7 @@ export function ConversationTimeline({
   reasoning,
   toolView,
   queued,
+  queuedSources,
   onEditQueued,
   onCancelQueued,
   onReveal,
@@ -34,6 +35,9 @@ export function ConversationTimeline({
   reasoning?: string
   toolView: ToolView
   queued: string[]
+  // The writer of each queued text, by position. '' or a missing entry is a
+  // text that a person typed.
+  queuedSources?: string[]
   onEditQueued: (index: number, text: string) => void
   onCancelQueued: (index: number) => void
   onReveal?: RevealFn
@@ -103,6 +107,7 @@ export function ConversationTimeline({
           <QueuedMessage
             key={'q' + index}
             text={text}
+            source={queuedSources?.[index] || undefined}
             onEdit={(nextText) => onEditQueued(index, nextText)}
             onCancel={() => onCancelQueued(index)}
           />

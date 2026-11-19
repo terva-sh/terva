@@ -32,12 +32,12 @@ func (s *Service) Prompt(ctx context.Context, sess string, p ctrlproto.PromptPar
 	return s.c.Call(ctx, sess, ctrlproto.MethodPrompt, p, nil)
 }
 
-func (s *Service) Queue(ctx context.Context, sess, text string) error {
-	return s.c.Call(ctx, sess, ctrlproto.MethodQueue, ctrlproto.QueueParams{Text: text}, nil)
+func (s *Service) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodQueue, p, nil)
 }
 
-func (s *Service) SetQueue(ctx context.Context, sess string, texts []string) error {
-	return s.c.Call(ctx, sess, ctrlproto.MethodQueueSet, ctrlproto.QueueSetParams{Texts: texts}, nil)
+func (s *Service) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodQueueSet, p, nil)
 }
 
 func (s *Service) Cancel(ctx context.Context, sess string) error {
@@ -197,6 +197,16 @@ func (s *Service) WorkflowRuns(ctx context.Context) ([]ctrlproto.WorkflowRunInfo
 func (s *Service) WorkflowRun(ctx context.Context, p ctrlproto.WorkflowGetParams) (ctrlproto.WorkflowRunView, error) {
 	var r ctrlproto.WorkflowRunView
 	err := s.c.Call(ctx, "", ctrlproto.MethodWorkflowsGet, p, &r)
+	return r, err
+}
+
+var _ ctrlproto.TimersController = (*Service)(nil)
+
+// TimerList reads the remote daemon's timers. It passes an empty sess, because
+// a timer belongs to the daemon and to no session.
+func (s *Service) TimerList(ctx context.Context) (ctrlproto.TimersResult, error) {
+	var r ctrlproto.TimersResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTimersList, nil, &r)
 	return r, err
 }
 

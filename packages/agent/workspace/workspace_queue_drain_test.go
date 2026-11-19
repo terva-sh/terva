@@ -93,7 +93,7 @@ func TestMidTurnDrainBroadcastsTheQueue(t *testing.T) {
 	tool := gatedStepTool{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	s := newTurnTestSession(t, &twoStepClient{})
 	s.agent.SetTools(core.Registry{"step": tool})
-	s.agent.AddQueueDrainedObserver(func([]string) { s.broadcastQueue() })
+	s.agent.AddQueueDrainedObserver(func([]core.QueuedMessage) { s.broadcastQueue() })
 
 	queues := collectQueueEvents(t, s)
 

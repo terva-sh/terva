@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -181,8 +182,15 @@ func TestAFailedTurnKeepsTheEnvelopeForTheNextTurn(t *testing.T) {
 		return len(roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineTurn && l.Member == "helm" })) > 0
 	})
 	queued := s.agent.PendingQueuedMessages()
-	if len(queued) != 2 || !strings.Contains(queued[0], second.ID) || !strings.Contains(queued[1], third.ID) {
+	if len(queued) != 2 || !strings.Contains(queued[0].Text, second.ID) || !strings.Contains(queued[1].Text, third.ID) {
 		t.Fatalf("after the failed turn the queue holds %q, want the second and third posts, in order", queued)
+	}
+	// A kept delivery went out of the queue and back in. It still says that
+	// the room delivered it.
+	for _, m := range queued {
+		if m.Source != ctrlproto.QueueSourceTalkootDelivery {
+			t.Fatalf("a kept delivery has the source %q, want %q", m.Source, ctrlproto.QueueSourceTalkootDelivery)
+		}
 	}
 	if _, ok := readLine(t, "helm", second.ID); ok {
 		t.Error("the kept envelope was read before a turn read it")

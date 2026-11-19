@@ -1020,7 +1020,7 @@ func hashMessage(m provider.Message) uint64 {
 	// live fold appends a share to a tool-role message that is already in the
 	// transcript, so without hashing it the cache serves back the row it
 	// rendered a moment earlier and the card never appears at all.
-	for _, k := range []string{"compaction", "tokens_before", "clear", MetaSharedKey} {
+	for _, k := range []string{"compaction", "tokens_before", "clear", metaSource, MetaSharedKey} {
 		if val := m.Meta[k]; val != "" {
 			h = fnv64aWriteByte(h, 'm')
 			h = fnv64aWrite(h, []byte(k))
@@ -1137,6 +1137,11 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen, thinkingOp
 	// show on its own (a clear leaves no message behind — the client mints this).
 	if state := m.Meta["clear"]; state != "" {
 		return v.renderClearBlock(state, width)
+	}
+	// A text that terva queued: a note with its writer's name, and not the
+	// person's bubble.
+	if m.Role == provider.RoleUser && m.Meta[metaSource] != "" {
+		return v.renderSourcedNote(m, width)
 	}
 
 	switch m.Role {
@@ -2724,6 +2729,54 @@ func (v *View) transcriptRule(label string, fill rune, width int) string {
 		body += strings.Repeat(string(fill), pad)
 	}
 	return indent + v.Theme.FG256(v.Theme.Muted, body)
+}
+
+// metaSource is core.MetaSource. This package does not import core, so the key
+// is spelled here, as "compaction" and "clear" are.
+const metaSource = "source"
+
+// SourceLabel is the name a person reads for the writer of a text that terva
+// queued (core.QueuedMessage.Source). A value with no name here shows as it
+// is, so a new source is visible before anybody names it.
+func SourceLabel(source string) string {
+	switch source {
+	case "swarm:recap":
+		return i18n.T("sub-agent report")
+	case "talkoot:delivery":
+		return i18n.T("team message")
+	}
+	return source
+}
+
+// renderSourcedNote draws a user-role message that no person typed: a rule
+// that names the writer, and the text below it in the muted tone.
+//
+// 🔑 It must not look like the person's bubble. The model reads these texts in
+// the user role, and a person who sees one in their own bubble reads it as
+// words they sent. The rule is the same one a compaction and a /clear use, so
+// the three host-made rows look like one family.
+func (v *View) renderSourcedNote(m provider.Message, width int) []string {
+	const indent = "    "
+	inner := width - len(indent)
+	if inner < 1 {
+		inner = 1
+	}
+	label := i18n.T("from terva · %s", SourceLabel(m.Meta[metaSource]))
+	lines := []string{v.transcriptRule(label, '─', width)}
+	for _, c := range m.Content {
+		tb, ok := c.(provider.TextBlock)
+		if !ok {
+			continue
+		}
+		for _, l := range strings.Split(tb.Text, "\n") {
+			// A sub-agent's findings can carry escape bytes from a terminal.
+			l = sanitizeUserBubbleLine(l)
+			for _, w := range wrapLine(l, inner, "") {
+				lines = append(lines, indent+v.Theme.FG256(v.Theme.Muted, w))
+			}
+		}
+	}
+	return lines
 }
 
 // renderClearBlock draws the boundary where the conversation was /cleared.

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -69,7 +70,7 @@ func (s *wsSession) queueTalkoot(text string, person bool, read func()) {
 	s.reads.mu.Lock()
 	s.reads.pending = append(s.reads.pending, talkootRead{text: strings.TrimSpace(text), person: person, read: read})
 	s.reads.mu.Unlock()
-	s.queue(text)
+	s.queueFrom(ctrlproto.QueueSourceTalkootDelivery, text)
 }
 
 // attach watches ag for the two ends of a delivery: its text enters the
@@ -154,14 +155,14 @@ func (r *talkootReads) forget(texts []string) {
 // split divides the texts a failed turn drained from its queue into the
 // deliveries that wait for a read, which stay queued, and the rest, which
 // the turn drops.
-func (r *talkootReads) split(texts []string) (kept, dropped []string) {
+func (r *talkootReads) split(queued []core.QueuedMessage) (kept, dropped []core.QueuedMessage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, t := range texts {
-		if r.pendingLocked(strings.TrimSpace(t)) {
-			kept = append(kept, t)
+	for _, m := range queued {
+		if r.pendingLocked(strings.TrimSpace(m.Text)) {
+			kept = append(kept, m)
 		} else {
-			dropped = append(dropped, t)
+			dropped = append(dropped, m)
 		}
 	}
 	return kept, dropped

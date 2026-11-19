@@ -89,7 +89,11 @@ export type Item = Placed &
     | { kind: 'error'; id: string; text: string }
   // host-injected (synthetic) user-role message, e.g. a continue-on-open-work
   // nudge — shown as a de-emphasized system note, not a user bubble.
-  | { kind: 'system'; id: string; text: string }
+  //
+  // source is set for a text that terva queued and that started or joined a
+  // turn, such as the report on a batch of sub-agents. The note then names
+  // its writer in place of the "auto" tag.
+  | { kind: 'system'; id: string; text: string; source?: string }
   // one-shot host-originated notice (an extension command's display/error/insert
   // result), shown in-stream but never persisted — dropped on the next snapshot.
   // noticeKind is the wire Notice.kind (the item's own `kind` is the row
@@ -273,6 +277,8 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
           ? compactionItem(m, text, ordinal, id, placed)
           : m.synthetic
             ? { kind: 'system', id, text, ...placed }
+            : m.role === 'user' && m.source
+              ? { kind: 'system', id, text, source: m.source, ...placed }
             : m.role === 'user'
               ? userRow(text, images, id, placed, m.time, m.attachments, m.attachments_missing)
               : { kind: 'assistant', id, text, streaming: false, images, reasoning, directed: m.directed, routed: m.routed, actor: m.actor, time: m.time, incomplete: m.incomplete, ...placed },
@@ -458,6 +464,9 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
       const images = imageAttachments(ev.message?.content)
       if (!text && !images) return items
       if (ev.message?.synthetic) return [...items, { kind: 'system', id: nextID(), text }]
+      // A text that terva wrote is not the person's message, so it takes no
+      // part in the direction check below.
+      if (ev.message?.source) return [...items, { kind: 'system', id: nextID(), text, source: ev.message.source }]
       const dir = directionBody(text)
       if (dir !== null) return [...items, { kind: 'user', id: nextID(), text: dir, directive: true }]
       return [...items, { kind: 'user', id: nextID(), text, images }]

@@ -615,22 +615,7 @@ func (i *Interactive) redraw() {
 	// "Sliding in" chips for messages the user typed while a turn is
 	// in flight. Shown directly above the status bar so they're close
 	// to the editor but don't push the chat around.
-	var queue []string
-	queued := i.carrierQueuedList()
-	if len(queued) > 0 {
-		queue = append(queue, "")
-		for _, q := range queued {
-			label := i.cfg.Theme.FG256(i.cfg.Theme.Accent, "  sliding in: ")
-			text := truncateLine(q, cols-17)
-			queue = append(queue, label+i.cfg.Theme.FG256(i.cfg.Theme.Muted, text))
-		}
-		// Hint row, rendered in the same muted tone as the model
-		// info on the status bar so it reads as ambient metadata
-		// rather than a chip. Tells the user how to recover the
-		// most recent queued message back into the editor.
-		hint := "  Press " + slideBackChordHint() + " to slide back into input"
-		queue = append(queue, i.cfg.Theme.FG256(i.cfg.Theme.Muted, hint))
-	}
+	queue := queueChipRows(i.cfg.Theme, i.carrierQueuedList(), cols)
 
 	// Parked-draft row (ctrl+s) or, while a stash-worthy draft is being
 	// typed against a running turn, the one-line nudge that the stash
@@ -1008,4 +993,37 @@ func truncateLine(s string, n int) string {
 // from needing a strconv import just for one call.
 func formatInt(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+// queueChipRows draws the "sliding in" chips for the texts that wait for the
+// running turn, with a blank row above them. They sit directly above the
+// status bar, close to the editor, so they do not push the chat around.
+func queueChipRows(theme tui.Theme, queued []queuedChip, cols int) []string {
+	if len(queued) == 0 {
+		return nil
+	}
+	rows := []string{""}
+	typed := false
+	for _, q := range queued {
+		label := theme.FG256(theme.Accent, "  sliding in: ")
+		text := q.text
+		// A text that terva queued names its writer, so that it does not
+		// read as something the person typed and forgot.
+		if q.source != "" {
+			text = "(" + tui.SourceLabel(q.source) + ") " + text
+		} else {
+			typed = true
+		}
+		rows = append(rows, label+theme.FG256(theme.Muted, truncateLine(text, cols-17)))
+	}
+	// Hint row, rendered in the same muted tone as the model info on the
+	// status bar so it reads as ambient metadata rather than a chip. It
+	// tells the user how to recover the most recent queued message back
+	// into the editor. The key takes only a text the person typed, so the
+	// hint needs one.
+	if typed {
+		hint := "  Press " + slideBackChordHint() + " to slide back into input"
+		rows = append(rows, theme.FG256(theme.Muted, hint))
+	}
+	return rows
 }

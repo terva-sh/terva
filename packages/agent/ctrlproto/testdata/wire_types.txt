@@ -222,7 +222,21 @@ ChatBridgeState
 	username	string	omitempty
 	paired_id	string	omitempty
 	session	string	omitempty
+	talkoot	string	omitempty
 	error	string	omitempty
+	outbound	*ChatOutbound	omitempty
+ChatHeld
+	from	string	omitempty
+	text	string
+	at	time.Time
+	reason	string	omitempty
+ChatOutbound
+	held	[]ChatHeld	omitempty
+	more	int	omitempty
+	quiet	bool	omitempty
+	quiet_ends	time.Time	omitzero
+	next_brief	time.Time	omitzero
+	brief_on_reply	bool	omitempty
 ChatServiceInfo
 	name	string
 	kind	string	omitempty
@@ -368,6 +382,7 @@ Event
 	snapshot	*Snapshot	omitempty
 	info	*SessionInfo	omitempty
 	queued	[]string	omitempty
+	queued_sources	[]string	omitempty
 	surface_id	string	omitempty
 	locale	string	omitempty
 	notice	*Notice	omitempty
@@ -748,8 +763,10 @@ ProvidersView
 	switch	*ProviderSwitchView	omitempty
 QueueParams
 	text	string
+	source	string	omitempty
 QueueSetParams
 	texts	[]string
+	sources	[]string	omitempty
 RaatiHistoryItem
 	id	string
 	when	string	omitempty
@@ -1117,6 +1134,7 @@ Snapshot
 	permissions	[]PermissionRequest	omitempty
 	asks	[]AskRequest	omitempty
 	queued	[]string	omitempty
+	queued_sources	[]string	omitempty
 	skills	[]SkillInfo	omitempty
 	tail	*TailInfo	omitempty
 	variant_marks	[]VariantMark	omitempty
@@ -1499,6 +1517,7 @@ TalkootSummary
 	color	string	omitempty
 	own_color	string	omitempty
 	state	string	omitempty
+	chat	*ChatBridgeState	omitempty
 TalkootTeamChange
 	field	string
 	class	string
@@ -1549,6 +1568,7 @@ TalkootView
 	text	string	omitempty
 	members	[]TalkootMember
 	held	[]string	omitempty
+	chat	*ChatBridgeState	omitempty
 TalkootWorkerParams
 	id	string
 	member	string
@@ -1617,6 +1637,18 @@ TenantsListResult
 	containment	TenantsContainment
 	refusals	[]TenantRefusal	omitempty
 	roles	[]string	omitempty
+TimerInfo
+	owner	string
+	id	string
+	label	string	omitempty
+	schedule	string
+	recurs	bool	omitempty
+	next	time.Time	omitzero
+	last_fired	time.Time	omitzero
+	problem	string	omitempty
+TimersResult
+	timers	[]TimerInfo
+	problem	string	omitempty
 ToolDisplay
 	subject	string	omitempty
 	body	string	omitempty

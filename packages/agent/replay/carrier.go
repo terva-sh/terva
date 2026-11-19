@@ -494,8 +494,10 @@ func (c *Carrier) Answer(ctx context.Context, sess, askID string, answers []core
 func (c *Carrier) Prompt(ctx context.Context, sess string, p ctrlproto.PromptParams) error {
 	return unsupported("prompt")
 }
-func (c *Carrier) Queue(ctx context.Context, sess, text string) error { return unsupported("queue") }
-func (c *Carrier) SetQueue(ctx context.Context, sess string, texts []string) error {
+func (c *Carrier) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
+	return unsupported("queue")
+}
+func (c *Carrier) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
 	return unsupported("queue")
 }
 func (c *Carrier) Compact(ctx context.Context, sess string) error { return unsupported("compact") }

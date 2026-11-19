@@ -73,7 +73,55 @@ The release cut runs it too, and refuses a stable break without a note.
 
 ## Unreleased
 
-No notes yet.
+### The queue methods carry what wrote each text
+
+An entry of the agent's queue is now a `core.QueuedMessage`: the text, and a
+`Source` that names the part of the host that wrote it. An empty `Source`
+means that a person typed the text. Five methods and one interface exchange
+that value where they exchanged a string.
+
+```go
+// Before
+text, ok := agent.ShiftQueuedMessage()
+agent.RequeueFront(text)
+for _, text := range agent.PendingQueuedMessages() { show(text) }
+
+// After
+m, ok := agent.ShiftQueuedMessage()
+agent.RequeueFront(m)
+for _, m := range agent.PendingQueuedMessages() { show(m.Text) }
+```
+
+- `ShiftQueuedMessage`, `PendingQueuedMessages` and `DrainQueuedMessages`
+  return entries. Read `.Text` where you read the string.
+- `RequeueFront` takes an entry. Pass back the one that `ShiftQueuedMessage`
+  gave you, so that a text your host wrote keeps its source. For a text that
+  a person typed, pass `core.QueuedMessage{Text: text}`.
+- `AddQueueDrainedObserver` takes a function over entries.
+- A component that implements `QueueObserver` must change its method to
+  `QueueDrained(drained []core.QueuedMessage)`. The compiler does not report
+  the old signature. The component compiles, no longer satisfies the
+  interface, and stops hearing the drains.
+
+`QueueMessage(text)` and `SetQueuedMessages(texts)` did not change. To queue a
+text that your host wrote, call `QueueMessageFrom(source, text)`. To replace
+the queue when you know the source of each entry you keep, call
+`SetQueuedEntries(entries)`. It tells apart two queued entries that have the
+same text, which `SetQueuedMessages` cannot. When your
+host starts a turn from a shifted entry, pass `core.UserMessageExtras{Meta:
+m.Meta()}`, and the message then records the same source as one that the loop
+took from the queue.
+
+The source is a label. The message carries it under `core.MetaSource`, the
+event carries it as `EvUserMessage.Source`, and `WireMessage.Source` carries
+it to a client. The user-message guard still judges every queued text.
+
+Covers: `packages/core.Agent.ShiftQueuedMessage`,
+`packages/core.Agent.PendingQueuedMessages`,
+`packages/core.Agent.DrainQueuedMessages`,
+`packages/core.Agent.RequeueFront`,
+`packages/core.Agent.AddQueueDrainedObserver`,
+`packages/core.QueueObserver.QueueDrained`
 
 ### Unstable changes (no promise)
 

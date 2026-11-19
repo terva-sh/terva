@@ -593,11 +593,13 @@ func (f *fakeSvc) Prompt(ctx context.Context, sess string, p PromptParams) error
 	return nil
 }
 
-func (f *fakeSvc) Queue(ctx context.Context, sess, text string) error          { return nil }
-func (f *fakeSvc) SetQueue(ctx context.Context, sess string, t []string) error { return nil }
-func (f *fakeSvc) Cancel(ctx context.Context, sess string) error               { return nil }
-func (f *fakeSvc) Compact(ctx context.Context, sess string) error              { return nil }
-func (f *fakeSvc) Clear(ctx context.Context, sess string) error                { return nil }
+func (f *fakeSvc) Queue(ctx context.Context, sess string, p QueueParams) error { return nil }
+func (f *fakeSvc) SetQueue(ctx context.Context, sess string, p QueueSetParams) error {
+	return nil
+}
+func (f *fakeSvc) Cancel(ctx context.Context, sess string) error  { return nil }
+func (f *fakeSvc) Compact(ctx context.Context, sess string) error { return nil }
+func (f *fakeSvc) Clear(ctx context.Context, sess string) error   { return nil }
 func (f *fakeSvc) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {
 	return nil
 }

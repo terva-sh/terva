@@ -1113,6 +1113,10 @@ type Interactive struct {
 	// every snapshot, so this is a complete mirror rather than a guess.
 	// Guarded by mu.
 	carrierQueued []string
+	// carrierQueuedSources names the writer of each queued entry by position,
+	// and is nil when a person typed them all (ctrlproto Event.QueuedSources).
+	// Guarded by mu.
+	carrierQueuedSources []string
 
 	// carrierReady gates prompting: true when the bound session can accept a
 	// turn. It replaced "is the crutch agent installed?", which was never

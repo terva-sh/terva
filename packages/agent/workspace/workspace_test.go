@@ -574,7 +574,7 @@ func TestSetQueueBroadcasts(t *testing.T) {
 	s := &wsSession{id: "x", hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{})}
 	sub := s.hub.add(nil, false)
 
-	s.setQueue([]string{"a", "b"})
+	s.setQueue([]core.QueuedMessage{{Text: "a"}, {Text: "b"}}, false)
 	ev := recvEvent(t, sub)
 	if ev.Type != ctrlproto.EventQueueUpdated {
 		t.Fatalf("want queue_updated, got %q", ev.Type)
@@ -584,7 +584,7 @@ func TestSetQueueBroadcasts(t *testing.T) {
 	}
 
 	// Cancelling one is a set of the remaining list.
-	s.setQueue([]string{"b"})
+	s.setQueue([]core.QueuedMessage{{Text: "b"}}, false)
 	ev2 := recvEvent(t, sub)
 	if len(ev2.Queued) != 1 || ev2.Queued[0] != "b" {
 		t.Fatalf("after cancel queued = %v, want [b]", ev2.Queued)

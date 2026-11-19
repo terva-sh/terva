@@ -202,6 +202,43 @@ func interruptibleContext() (context.Context, context.CancelFunc) {
 	return ctx, func() { cancel(ErrUserInterrupted) }
 }
 
+// A prompt with a source is the host's text: a report on sub-agents, or a
+// delivery from a team's room. A person who stops its turn did not send it by
+// accident, so it stays in the transcript and no composer gets it back.
+func TestAPromptWithASourceIsNotWithdrawn(t *testing.T) {
+	client := &silentUntilCancelledClient{started: make(chan struct{}, 1)}
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	rec := &eventRecorder{}
+	ctx, cancel := interruptibleContext()
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = a.PromptWithPolicyExtra(ctx, "the report on two sub-agents", nil,
+			UserMessageExtras{Meta: map[string]string{MetaSource: "swarm:recap"}}, rec.sink)
+	}()
+
+	select {
+	case <-client.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the turn never reached the provider")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the prompt did not return after the cancel")
+	}
+
+	if got := agentUserTexts(a); len(got) != 1 || got[0] != "the report on two sub-agents" {
+		t.Errorf("the transcript holds %q after the cancel, want the host's text kept", got)
+	}
+	if w, ok := rec.withdrawn(); ok {
+		t.Errorf("the host's text was withdrawn and offered back as %q", w.Text)
+	}
+}
+
 // --- the case the feature exists for ----------------------------------------
 
 func TestACancelledPromptIsWithdrawnFromTheTranscript(t *testing.T) {

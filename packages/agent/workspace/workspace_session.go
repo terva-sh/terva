@@ -612,7 +612,7 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// one: the loop's own drain at a mid-turn safe boundary, which is what this
 	// closes. Broadcast the queue as it stands rather than the drained list, so
 	// a message queued in the same breath is not overwritten by a stale empty.
-	ag.AddQueueDrainedObserver(func([]string) { s.broadcastQueue() })
+	ag.AddQueueDrainedObserver(func([]core.QueuedMessage) { s.broadcastQueue() })
 	// A talkoot member's reads, attached before any turn so the first one
 	// sees a guard's refusal.
 	s.reads.watch.Do(func() { s.reads.attach(ag) })
@@ -998,7 +998,9 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock, extras
 		// the release is still shifting. Front, not back: this text was composed
 		// before anything queued behind it.
 		if refused.Load() {
-			s.agent.RequeueFront(text)
+			// The source went into the prompt with extras, so it comes back
+			// out of them. A text that waits again keeps its writer.
+			s.agent.RequeueFront(core.QueuedMessage{Text: text, Source: extras.Meta[core.MetaSource]})
 			s.broadcastQueue()
 		}
 	})
@@ -1202,7 +1204,7 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why, interrupted)
 		}
 		if restart {
-			if perr := s.prompt(next, nil, core.UserMessageExtras{}); perr != nil {
+			if perr := s.promptQueued(next); perr != nil {
 				// Raced a client Prompt that claimed the slot between endTurn
 				// and here: re-arm at the front so the new turn's first safe
 				// boundary delivers it instead of losing it.
@@ -1416,7 +1418,7 @@ func (s *wsSession) memIndex(disk int) (int, bool) {
 // web client had too). Holding s.mu across the release AND the shift means a
 // concurrent queue() lands either before the shift (delivered by the restart)
 // or after the release (sees idle and starts its own turn) — never in between.
-func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, restart bool) {
+func (s *wsSession) endTurn(turnCtx context.Context, err error) (next core.QueuedMessage, restart bool) {
 	// ErrBusy is NOT a failed turn — it is a turn that never started, because
 	// something else held the agent. Counting it as failure drained the whole
 	// pending queue: every follow-up the user had lined up, discarded because a
@@ -1427,7 +1429,7 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, re
 	storageFailed := s.agent.PersistenceError() != nil
 	s.mu.Lock()
 	s.turnCtx, s.turnCancel = nil, nil
-	var dropped []string
+	var dropped []core.QueuedMessage
 	if storageFailed {
 		// Keep unsent input available for recovery. This handle cannot run it.
 	} else if failed {
@@ -1439,7 +1441,7 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, re
 		// ⚠️ The kept texts go back at the front, oldest first. A text can
 		// reach the queue without s.mu, and one that lands between the
 		// drain and here is newer, so it goes behind them.
-		var kept []string
+		var kept []core.QueuedMessage
 		kept, dropped = s.reads.split(s.agent.DrainQueuedMessages())
 		for i := len(kept) - 1; i >= 0; i-- {
 			s.agent.RequeueFront(kept[i])
@@ -2498,13 +2500,20 @@ func firstUserText(msgs []provider.Message) string {
 // previously it stranded until the next user prompt. The enqueue happens under
 // s.mu so it can't slip between a finishing turn's last boundary check and its
 // endTurn queue shift (which holds the same lock).
-func (s *wsSession) queue(text string) {
+func (s *wsSession) queue(text string) { s.queueFrom("", text) }
+
+// queueFrom is queue for a text that terva wrote. source names the writer,
+// such as ctrlproto.QueueSourceSwarmRecap, and an empty source is a person.
+// The source stays with the text through every wait and every restart, and
+// the message that the text becomes carries it. See core.QueuedMessage.
+func (s *wsSession) queueFrom(source, text string) {
+	m := core.QueuedMessage{Text: text, Source: source}
 	s.mu.Lock()
 	// compacting counts as busy. It is not a turn, but it holds the agent's
 	// single-flight just as hard, and dispatching into it gets the prompt
 	// refused with an ErrBusy that nothing surfaces — the text simply vanished.
 	if s.turnCancel != nil || s.compacting {
-		queued := s.agent.QueueMessage(text)
+		queued := s.agent.QueueMessageFrom(m.Source, m.Text)
 		s.mu.Unlock()
 		if queued {
 			s.broadcastQueue()
@@ -2515,27 +2524,36 @@ func (s *wsSession) queue(text string) {
 	// its talkoot deliveries (endTurn). The oldest text starts the turn, and
 	// this one waits behind the rest.
 	waited := false
-	if s.agent.QueuedMessageCount() > 0 && s.agent.QueueMessage(text) {
+	if s.agent.QueuedMessageCount() > 0 && s.agent.QueueMessageFrom(m.Source, m.Text) {
 		if head, ok := s.agent.ShiftQueuedMessage(); ok {
-			text, waited = head, true
+			m, waited = head, true
 		}
 	}
 	s.mu.Unlock()
 	if waited {
 		s.broadcastQueue()
 	}
-	if err := s.prompt(text, nil, core.UserMessageExtras{}); err != nil {
+	if err := s.promptQueued(m); err != nil {
 		// Raced a concurrent Prompt that claimed the slot first: queue onto the
 		// turn that beat us (its boundaries / endTurn shift deliver it). A text
 		// that waited goes back at the front, where it was.
-		requeue := s.agent.QueueMessage
+		requeued := false
 		if waited {
-			requeue = s.agent.RequeueFront
+			requeued = s.agent.RequeueFront(m)
+		} else {
+			requeued = s.agent.QueueMessageFrom(m.Source, m.Text)
 		}
-		if requeue(text) {
+		if requeued {
 			s.broadcastQueue()
 		}
 	}
+}
+
+// promptQueued starts a turn from an entry that left the queue. The entry's
+// source goes into the prompt's metadata, so the message reads the same as
+// one that the loop took from the queue in the middle of a turn.
+func (s *wsSession) promptQueued(m core.QueuedMessage) error {
+	return s.prompt(m.Text, nil, core.UserMessageExtras{Meta: m.Meta()})
 }
 
 // endCompacting releases the compacting flag and settles the queue that built
@@ -2562,7 +2580,7 @@ func (s *wsSession) endCompacting() {
 		return
 	}
 	s.broadcastQueue()
-	if err := s.prompt(next, nil, core.UserMessageExtras{}); err != nil {
+	if err := s.promptQueued(next); err != nil {
 		// Something claimed the slot between the release and here. Re-arm at
 		// the front so that turn's first safe boundary delivers it, exactly as
 		// the endTurn restart path does.
@@ -2572,11 +2590,23 @@ func (s *wsSession) endCompacting() {
 }
 
 // setQueue replaces the pending queue wholesale (edit/cancel) and broadcasts it.
-func (s *wsSession) setQueue(texts []string) {
+//
+// known says that the client named the source of each entry. The agent then
+// keeps a source only for an entry that the queue holds with that text and
+// that source. An older client names none, and the agent matches by text.
+func (s *wsSession) setQueue(entries []core.QueuedMessage, known bool) {
 	// ⚠️ A talkoot delivery that the edit removes keeps its waiting entry,
 	// which matches nothing. Forgetting it here would race the loop's drain:
 	// a text drained between a snapshot and this replace is being read.
-	s.agent.SetQueuedMessages(texts)
+	if known {
+		s.agent.SetQueuedEntries(entries)
+	} else {
+		texts := make([]string, len(entries))
+		for i, e := range entries {
+			texts[i] = e.Text
+		}
+		s.agent.SetQueuedMessages(texts)
+	}
 	s.broadcastQueue()
 }
 
@@ -2681,6 +2711,7 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 	}
 	s.mu.Unlock()
 	sort.Slice(marks, func(i, j int) bool { return marks[i].Index < marks[j].Index })
+	queued, queuedSources := ctrlproto.QueueView(s.agent.PendingQueuedMessages())
 	return ctrlproto.Snapshot{
 		Session:  s.info(),
 		Messages: wm,
@@ -2688,15 +2719,16 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 		// thing (free in-process — the slices are shared); the serialization edge cuts
 		// it down per client contract, and stamps Base. Total and Epoch are true of the
 		// transcript either way, which is what lets a windowed client place what it got.
-		Epoch:        epoch,
-		Total:        len(wm),
-		Busy:         busy,
-		Permissions:  perms,
-		Asks:         asks,
-		Queued:       s.agent.PendingQueuedMessages(),
-		Skills:       s.skillList(),
-		Tail:         tail,
-		VariantMarks: marks,
+		Epoch:         epoch,
+		Total:         len(wm),
+		Busy:          busy,
+		Permissions:   perms,
+		Asks:          asks,
+		Queued:        queued,
+		QueuedSources: queuedSources,
+		Skills:        s.skillList(),
+		Tail:          tail,
+		VariantMarks:  marks,
 	}
 }
 

@@ -81,6 +81,11 @@ const (
 	MethodWorkflowsList Method = "workflows.list" // result WorkflowRunsResult; read-only
 	MethodWorkflowsGet  Method = "workflows.get"  // params WorkflowGetParams, result WorkflowRunView; read-only
 
+	// The daemon's timers (optional; served only by a TimersController).
+	// Read-only: an owner inside the daemon sets and cancels its timers, and
+	// this shows a person what the daemon will do by itself. See timers.go.
+	MethodTimersList Method = "timers.list" // result TimersResult; read-only
+
 	// The files this session's agent handed to the user with share_file
 	// (optional; served only by a SharedFilesController). Read-only, and in the
 	// session group because a share is scoped to the conversation that produced
@@ -463,6 +468,7 @@ func (m Method) Group() Group {
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSuggestNextStep, MethodSessionsDoctor,
 		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport,
 		MethodWorkflowsList, MethodWorkflowsGet,
+		MethodTimersList,
 		MethodSharedList, MethodSharedFetch:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelHide, MethodModelSetDefault, MethodSessionReasoning,
@@ -530,6 +536,55 @@ type AttachmentRef struct {
 // QueueParams is the payload of [MethodQueue].
 type QueueParams struct {
 	Text string `json:"text"`
+	// Source names the writer of a text that no person typed, in the
+	// "area:kind" form of [QueueSourceSwarmRecap]. A client that sends what a
+	// person typed leaves it empty. The message that the text becomes carries
+	// the value (core.WireMessage.Source), and every client then shows the
+	// text as a note from that writer and not as the person's own message.
+	//
+	// 🚨 It is a label. The session's user-message guard judges the text
+	// whatever the source says. A value that [ValidQueueSource] refuses fails
+	// the call.
+	Source string `json:"source,omitempty"`
+}
+
+// The sources that terva itself gives a queued text. A client shows a value
+// that it does not know the same way, with the value as the label.
+const (
+	// QueueSourceSwarmRecap is the report on a batch of sub-agents that the
+	// session started.
+	QueueSourceSwarmRecap = "swarm:recap"
+	// QueueSourceTalkootDelivery is a message that a team's room delivered to
+	// a member's session.
+	QueueSourceTalkootDelivery = "talkoot:delivery"
+)
+
+// maxQueueSourceLen bounds a source. The value is a label that every client
+// prints beside the message.
+const maxQueueSourceLen = 64
+
+// ValidQueueSource reports whether s can be the source of a queued text:
+// empty, or at most 64 bytes of lower-case letters, digits, and the marks
+// ":", ".", "_" and "-". The value reaches the transcript and every client's
+// screen, so it stays one short word.
+//
+// 🚨 The two Stage markers are refused. They share the message key with a
+// queue source (core.MetaSource) and mean an authored line there, so a
+// queued text must never carry one.
+func ValidQueueSource(s string) bool {
+	if len(s) > maxQueueSourceLen || s == core.MetaDirected || s == core.MetaRouted {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == ':' || c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // QueueSetParams is the payload of [MethodQueueSet]: the complete new pending
@@ -537,6 +592,42 @@ type QueueParams struct {
 // messages before they are injected. An empty slice clears the queue.
 type QueueSetParams struct {
 	Texts []string `json:"texts"`
+	// Sources says which entries the client keeps: the source of each text
+	// by position, as queue_updated gave it, and "" for a text that a person
+	// typed or changed. With it, two queued entries that have the same text
+	// and different sources stay two entries, and the removal of one never
+	// moves its source to the other. It has the length of Texts, and a value
+	// that [ValidQueueSource] refuses fails the call.
+	//
+	// 🚨 A client confirms a source here and cannot give one. A text keeps a
+	// source only when the queue holds an entry with that text and that
+	// source. Any other text becomes the person's.
+	//
+	// A client that sends no list is an older one. The session then matches
+	// by text alone, and the first of two equal texts keeps the first source.
+	Sources []string `json:"sources,omitempty"`
+}
+
+// Entries is the queue that p asks for, and known says whether the client
+// named the sources. It fails when the two lists do not line up or a source
+// is not a valid name.
+func (p QueueSetParams) Entries() (entries []core.QueuedMessage, known bool, err error) {
+	known = len(p.Sources) > 0
+	if known && len(p.Sources) != len(p.Texts) {
+		return nil, false, Errorf(CodeBadRequest, "queue.set: %d sources for %d texts", len(p.Sources), len(p.Texts))
+	}
+	entries = make([]core.QueuedMessage, len(p.Texts))
+	for i, t := range p.Texts {
+		entries[i].Text = t
+		if !known {
+			continue
+		}
+		if !ValidQueueSource(p.Sources[i]) {
+			return nil, false, Errorf(CodeBadRequest, "queue.set: source %d is not a valid name", i)
+		}
+		entries[i].Source = p.Sources[i]
+	}
+	return entries, known, nil
 }
 
 // ApproveParams is the payload of [MethodApprove].

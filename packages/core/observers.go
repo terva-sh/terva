@@ -281,7 +281,7 @@ func (a *Agent) AppendRecord(write func(TranscriptStore) error) {
 // this to whatever they broadcast the queue with.
 //
 // Fired with a.mu released, so an observer may read the agent. nil is a no-op.
-func (a *Agent) AddQueueDrainedObserver(fn func(drained []string)) {
+func (a *Agent) AddQueueDrainedObserver(fn func(drained []QueuedMessage)) {
 	if fn == nil {
 		return
 	}
@@ -453,9 +453,9 @@ func (a *Agent) fireRetry(rec RetryRecord) {
 
 // fireQueueDrained runs with a.mu released — observers call back into the host,
 // which reads the agent.
-func (a *Agent) fireQueueDrained(drained []string) {
+func (a *Agent) fireQueueDrained(drained []QueuedMessage) {
 	a.obsMu.RLock()
-	obs := make([]func(drained []string), len(a.queueDrainedObs))
+	obs := make([]func(drained []QueuedMessage), len(a.queueDrainedObs))
 	copy(obs, a.queueDrainedObs)
 	a.obsMu.RUnlock()
 	for _, fn := range obs {

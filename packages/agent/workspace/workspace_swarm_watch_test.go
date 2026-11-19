@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
@@ -25,7 +26,16 @@ func waitQueuedRecap(t *testing.T, s *wsSession) []string {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if q := s.agent.PendingQueuedMessages(); len(q) > 0 {
-			return q
+			// 🔑 The recap names its writer. Every front end reads the source
+			// to show the text as a report and not as the person's message.
+			texts := make([]string, len(q))
+			for i, m := range q {
+				if m.Source != ctrlproto.QueueSourceSwarmRecap {
+					t.Fatalf("the recap was queued with the source %q, want %q", m.Source, ctrlproto.QueueSourceSwarmRecap)
+				}
+				texts[i] = m.Text
+			}
+			return texts
 		}
 		if time.Now().After(deadline) {
 			s.swarmWatchMu.Lock()

@@ -283,6 +283,8 @@ You can keep typing while the agent is working. Pressing `enter` during a turn q
 
 To recover the most recently queued message back into the editor (to tweak it before it runs), press `Option+↑`. In VS Code's integrated terminal that chord doesn't survive xterm.js's macOS key handling, so use `Option+Shift+↑` there. terva's hint line under the sliding-in queue adapts automatically based on `$TERM_PROGRAM`.
 
+terva queues texts of its own in the same place, such as the report on a batch of sub-agents. Such a chip names its writer, as in `sliding in: (sub-agent report) …`. `Option+↑` takes only a message that you typed, and leaves terva's text in the queue. When the text reaches the conversation, it shows under a rule that reads `from terva · sub-agent report`, and not in your own message bubble.
+
 ## Setting a draft aside (`ctrl+s`)
 
 Queuing covers messages you've already submitted; `ctrl+s` covers the one you haven't. The situation it exists for: you start composing a reply while the agent is still responding, and the response turns out to end in a question you need to answer before your draft makes sense to send. Press `ctrl+s` to set the draft aside. It parks above the status bar as `set aside: <text>` (cursor position, collapsed pastes, and pending clipboard images all preserved) and the editor clears so you can type the answer. The moment you send it, the parked draft drops back into the editor and you continue where you left off.

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -334,7 +335,7 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		sb.WriteString("\n\n")
 	}
 	sb.WriteString(i18n.P("swarm.summary.instruction", "This note reports the state of sub-agents you started. It is not a new user request. Summarize the collective outcome for the user in brief, and reference the agents by id. If any failed, suggest a follow-up. Otherwise confirm completion. Do not start new sub-agents unless the user asks."))
-	s.queue(sb.String())
+	s.queueFrom(ctrlproto.QueueSourceSwarmRecap, sb.String())
 }
 
 // truncateForSummary bounds a recap field, ellipsizing overflow.

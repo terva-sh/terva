@@ -3,6 +3,7 @@ package ctrlproto
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"terva.sh/terva/packages/core"
 
@@ -41,13 +42,21 @@ type WorkspaceService interface {
 	// running turn on sess (the multi-device / interject story). If no turn is
 	// running it behaves like a deferred Prompt at the implementation's
 	// discretion.
-	Queue(ctx context.Context, sess, text string) error
+	//
+	// It takes the params struct for the reason Prompt does. p.Source names
+	// the writer of a text that no person typed, and it is a label alone: an
+	// implementation gives the text no authority for it.
+	Queue(ctx context.Context, sess string, p QueueParams) error
 
 	// SetQueue replaces sess's entire pending queue — the primitive behind
 	// editing or cancelling queued messages before they inject. An empty slice
 	// clears the queue. Implementations broadcast the new state so every client
 	// converges.
-	SetQueue(ctx context.Context, sess string, texts []string) error
+	//
+	// It takes the params struct for the reason Prompt does. p.Sources says
+	// which entries the client keeps, so that the source of a queued text
+	// stays with that text. See [QueueSetParams].
+	SetQueue(ctx context.Context, sess string, p QueueSetParams) error
 
 	// Cancel interrupts the active turn on sess, if any. A no-op when idle.
 	Cancel(ctx context.Context, sess string) error
@@ -887,7 +896,42 @@ type ChatBridgeState struct {
 	Username  string `json:"username,omitempty"`
 	PairedID  string `json:"paired_id,omitempty"` // "" until a user sends /start
 	Session   string `json:"session,omitempty"`
-	Error     string `json:"error,omitempty"` // set when State == "error"
+	// Talkoot is set in place of Session when the bridge serves a talkoot: the
+	// owner's messages enter that team's room as their posts.
+	Talkoot string `json:"talkoot,omitempty"`
+	Error   string `json:"error,omitempty"` // set when State == "error"
+	// Outbound is set for a talkoot's bridge: what the host holds back from
+	// the chat, and when it goes out.
+	Outbound *ChatOutbound `json:"outbound,omitempty"`
+}
+
+// ChatOutbound is what a talkoot's chat bridge holds back (decision 0029 rule
+// 22). The host sends a message at once only for a reason: a question, a
+// reply to a person who is in the conversation, finished work, a decision
+// that waits, or a watched change. Every other message waits for the brief.
+type ChatOutbound struct {
+	// Held lists the messages that wait, the oldest first.
+	Held []ChatHeld `json:"held,omitempty"`
+	// More counts the held messages the queue dropped when it was full. They
+	// are in the room.
+	More int `json:"more,omitempty"`
+	// Quiet says quiet hours are on now, and QuietEnds says when they end.
+	Quiet     bool      `json:"quiet,omitempty"`
+	QuietEnds time.Time `json:"quiet_ends,omitzero"`
+	// NextBrief is when the brief goes out next. BriefOnReply says that no
+	// brief time is set, so the brief goes out when the person next writes.
+	NextBrief    time.Time `json:"next_brief,omitzero"`
+	BriefOnReply bool      `json:"brief_on_reply,omitempty"`
+}
+
+// ChatHeld is one message that a talkoot's chat bridge holds back. Reason
+// says why it goes out when quiet hours end: finished, decision, or watch. A
+// message with no reason is an update, and it waits for the brief.
+type ChatHeld struct {
+	From   string    `json:"from,omitempty"`
+	Text   string    `json:"text"`
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason,omitempty"`
 }
 
 // PermissionsView is the permissions inspector pane: the session's approval

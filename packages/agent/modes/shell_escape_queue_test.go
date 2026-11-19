@@ -112,6 +112,7 @@ func TestReleaseSlotClearsTheCompactFlag(t *testing.T) {
 // second, silently-diverging source of truth.
 var queueMutators = []string{
 	"QueueMessage",
+	"QueueMessageFrom",
 	"DrainQueuedMessages",
 	"ShiftQueuedMessage",
 	"RequeueFront",

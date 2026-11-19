@@ -141,6 +141,10 @@ const (
 // ordinary model turn — "card:greeting" for a seeded opening, MetaDirected for a
 // user-directed line (below). MetaActor carries the speaking character's name on
 // a directed line.
+//
+// On a user-role message the key says that no person typed the text: the host
+// queued it, and the value names the writer (see [QueuedMessage]). WireMessage
+// carries that case as Source.
 const (
 	MetaSource = "source"
 	MetaActor  = "actor"
@@ -342,6 +346,16 @@ type WireMessage struct {
 	// Synthetic is true for a host-injected message (not the user's words), so a
 	// client can render it as a system note instead of a user bubble.
 	Synthetic bool `json:"synthetic,omitempty"`
+	// Source names the part of the host that wrote a user-role message, such
+	// as "swarm:recap" for the report on a batch of sub-agents. It is absent
+	// when a person typed the message. A client shows a message with a source
+	// as a note from terva, with the source as its label, and never as the
+	// person's own message. A client that does not know a value shows it the
+	// same way. An assistant message never carries it: Directed and Routed
+	// cover the sources on that side.
+	//
+	// Unlike Synthetic, a message with a source can start a turn.
+	Source string `json:"source,omitempty"`
 	// Compaction is true for the summary a compaction checkpoint left behind,
 	// and TokensBefore is that checkpoint's estimate of what it replaced. A
 	// client renders the pair as a divider ("compacted here, ~N tokens") with
@@ -644,11 +658,19 @@ func messageToWire(m provider.Message, imageData bool) WireMessage {
 		// renders without it.
 		w.TokensBefore, _ = strconv.Atoi(m.Meta[MetaTokensBefore])
 	}
-	switch m.Meta[MetaSource] {
-	case MetaDirected:
+	// 🚨 The role decides how to read the source, and the user side comes
+	// first. On a user message every value names the writer of a queued text,
+	// the two Stage markers included: a client names that source, and a marker
+	// that turned such a message into a directed line would hide who wrote it.
+	// An assistant message with another source, such as a seeded greeting,
+	// shows as an ordinary reply and stays one.
+	switch src := m.Meta[MetaSource]; {
+	case m.Role == provider.RoleUser:
+		w.Source = src
+	case src == MetaDirected:
 		w.Directed = true
 		w.Actor = m.Meta[MetaActor] // empty = narrator
-	case MetaRouted:
+	case src == MetaRouted:
 		w.Routed = true
 		w.Actor = m.Meta[MetaActor] // empty = narrator
 	}
@@ -766,6 +788,9 @@ func MessageFromWire(w WireMessage) provider.Message {
 		if w.Actor != "" {
 			setMeta(MetaActor, w.Actor)
 		}
+	}
+	if w.Source != "" && m.Role == provider.RoleUser {
+		setMeta(MetaSource, w.Source)
 	}
 	// The shares this message's tool calls published, back into the Meta key
 	// messageToWire lifted them out of. Without this a client that rebuilds its

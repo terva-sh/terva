@@ -65,7 +65,7 @@ type DispatchWatcher interface {
 // QueueObserver hears the messages the loop drains from the queue, as
 // AddQueueDrainedObserver's function would.
 type QueueObserver interface {
-	QueueDrained(drained []string)
+	QueueDrained(drained []QueuedMessage)
 }
 
 // TurnFilter can stop a turn before each step.

@@ -29,6 +29,11 @@ type EvUserMessage struct {
 	// re-prompt isn't mistaken for the user's words. Genuine prompts
 	// (initial and queued) leave it false.
 	Synthetic bool
+	// Source is the message's MetaSource value: empty for a person's own
+	// words, and the name of the writer for a text that the host queued or
+	// prompted with, such as "swarm:recap". An observer that records what the
+	// user said reads a message with a source as a report from the host.
+	Source string
 }
 
 func (EvUserMessage) Type() string { return "user_message" }

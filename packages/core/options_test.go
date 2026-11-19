@@ -82,7 +82,7 @@ func (p *probe) WrapGate(inner Gate) Gate {
 }
 func (p *probe) ObserveEvent(AgentEvent)         { p.hit("event") }
 func (p *probe) ObserveMessage(provider.Message) { p.hit("message") }
-func (p *probe) QueueDrained([]string)           { p.hit("queue") }
+func (p *probe) QueueDrained([]QueuedMessage)    { p.hit("queue") }
 func (p *probe) DispatchObserver() DispatchObserver {
 	return DispatchObserver{Sent: func(provider.Request) { p.hit("dispatch") }}
 }

@@ -865,6 +865,8 @@ button.ident-home:hover .persona { text-decoration: underline; }
 /* queued (pending) user messages, shown while a turn is running */
 .msg.queued { align-self: flex-end; display: flex; align-items: flex-start; gap: 8px; opacity: .75; background: transparent; color: var(--fg); border: 1px dashed var(--user); }
 .msg.queued .queued-mark { color: var(--user); opacity: .8; flex: none; }
+.msg.queued.sourced { border-color: var(--line); }
+.msg.queued.sourced .queued-text { max-height: 4.5em; overflow: hidden; }
 .msg.queued .queued-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.queued .queued-tools { display: flex; gap: 2px; flex: none; }
 .msg.queued.editing { flex-direction: column; gap: 6px; width: min(88%, 520px); }
@@ -1406,6 +1408,11 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .lore-content { resize: vertical; font-family: ui-monospace, SFMono-Regular, monospace; }
 .lore-const { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .lore-edit-btns { display: flex; gap: 6px; }
+
+/* a text that terva queued (extends .sys-note): the writer's name, then the
+   text with its line breaks, in a box that scrolls when the report is long */
+.sys-note.sourced { display: block; align-self: stretch; max-width: 100%; font-style: normal; }
+.sys-note.sourced .sys-body { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
 
 /* one-shot command notice, in-stream (extends .sys-note) */
 .sys-note.notice { font-style: normal; }

@@ -33,6 +33,11 @@ type Event struct {
 	// message queue after a change, so every client's queued-message view
 	// converges. A present-but-empty slice means the queue was cleared.
 	Queued []string `json:"queued,omitempty"`
+	// QueuedSources names the writer of each entry of Queued, by position. An
+	// empty value means that a person typed the entry. The list is absent when
+	// no entry has a source, and it has the length of Queued when it is
+	// present. See [QueueParams].
+	QueuedSources []string `json:"queued_sources,omitempty"`
 	// SurfaceID is set on an [EventSurfaceUpdated] event: the id of the pane
 	// whose content changed. The event is a signal — a client showing that
 	// surface re-fetches it with surface.get.
@@ -239,8 +244,10 @@ type Snapshot struct {
 	Permissions []PermissionRequest `json:"permissions,omitempty"`
 	Asks        []AskRequest        `json:"asks,omitempty"`
 	// Queued is the pending message queue, so a reconnecting client restores the
-	// queued-message view.
-	Queued []string `json:"queued,omitempty"`
+	// queued-message view. QueuedSources is the list of the same name on a
+	// queue_updated event.
+	Queued        []string `json:"queued,omitempty"`
+	QueuedSources []string `json:"queued_sources,omitempty"`
 	// Skills are the session's available skills, so the client can autocomplete
 	// the `/skill` composer command by name.
 	Skills []SkillInfo `json:"skills,omitempty"`
@@ -440,8 +447,32 @@ func SessionUpdatedEvent(info SessionInfo) Event {
 // QueueUpdatedEvent builds an [EventQueueUpdated] event. An empty queue
 // serializes as an absent Queued field (omitempty); the event type is the
 // signal, so a client reads Queued as "the whole list, empty if absent".
-func QueueUpdatedEvent(texts []string) Event {
-	return Event{WireEvent: core.WireEvent{Type: EventQueueUpdated}, Queued: texts}
+func QueueUpdatedEvent(queue []core.QueuedMessage) Event {
+	texts, sources := QueueView(queue)
+	return Event{WireEvent: core.WireEvent{Type: EventQueueUpdated}, Queued: texts, QueuedSources: sources}
+}
+
+// QueueView is the wire form of a queue: the texts, and the source of each
+// one by position. sources is nil when no entry has one, so a queue of a
+// person's texts looks on the wire as it did before sources existed.
+func QueueView(queue []core.QueuedMessage) (texts, sources []string) {
+	if len(queue) == 0 {
+		return nil, nil
+	}
+	texts = make([]string, len(queue))
+	sourced := false
+	for i, m := range queue {
+		texts[i] = m.Text
+		sourced = sourced || m.Source != ""
+	}
+	if !sourced {
+		return texts, nil
+	}
+	sources = make([]string, len(queue))
+	for i, m := range queue {
+		sources[i] = m.Source
+	}
+	return texts, sources
 }
 
 // SurfaceUpdatedEvent builds an [EventSurfaceUpdated] signal for one pane.

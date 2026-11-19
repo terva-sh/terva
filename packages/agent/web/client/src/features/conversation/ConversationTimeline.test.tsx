@@ -54,6 +54,73 @@ afterEach(() => {
   else delete (document as unknown as Record<string, unknown>).execCommand
 })
 
+describe('ConversationTimeline queued messages from terva', () => {
+  it('names the writer, offers no edit, and removes by its own index', () => {
+    const onCancelQueued = vi.fn()
+    const view = render(
+      <ConversationTimeline
+        {...props({ queued: ['typed', 'the recap'], queuedSources: ['', 'swarm:recap'], onCancelQueued })}
+      />,
+    )
+
+    const chips = view.container.querySelectorAll('.msg.queued')
+    expect(chips).toHaveLength(2)
+    // The typed chip is the person's, with its edit button.
+    expect(chips[0].classList.contains('user')).toBe(true)
+    expect(chips[0].querySelector('[title="Edit queued message"]')).not.toBeNull()
+    // The recap's chip is not, and it says who wrote it.
+    expect(chips[1].classList.contains('user')).toBe(false)
+    expect(chips[1].querySelector('.sys-tag')?.textContent).toBe('sub-agent report')
+    expect(chips[1].textContent).toContain('the recap')
+    expect(chips[1].querySelector('[title="Edit queued message"]')).toBeNull()
+
+    fireEvent.click(chips[1].querySelector('[title="Remove from queue"]') as Element)
+    expect(onCancelQueued).toHaveBeenCalledWith(1)
+  })
+
+  // A chip is keyed by its position. While a person edits the first typed
+  // text, that text leaves the queue, and the report behind it moves into the
+  // same component. The editor must not stay open over the report.
+  it('closes an open editor when another entry takes its place', () => {
+    const onEditQueued = vi.fn()
+    const view = render(
+      <ConversationTimeline
+        {...props({ queued: ['typed', 'the recap'], queuedSources: ['', 'swarm:recap'], onEditQueued })}
+      />,
+    )
+    fireEvent.click(screen.getByTitle('Edit queued message'))
+    expect(view.container.querySelector('textarea')).not.toBeNull()
+
+    view.rerender(
+      <ConversationTimeline {...props({ queued: ['the recap'], queuedSources: ['swarm:recap'], onEditQueued })} />,
+    )
+    expect(view.container.querySelector('textarea')).toBeNull()
+    const chip = view.container.querySelector('.msg.queued') as Element
+    expect(chip.querySelector('.sys-tag')?.textContent).toBe('sub-agent report')
+    expect(chip.querySelector('[title="Edit queued message"]')).toBeNull()
+    expect(onEditQueued).not.toHaveBeenCalled()
+  })
+
+  // The same move between two typed texts: the editor closes, and the draft
+  // of the text that left does not overwrite the one that moved in.
+  it('does not carry a draft from one typed entry to the next', () => {
+    const onEditQueued = vi.fn()
+    const view = render(<ConversationTimeline {...props({ queued: ['first', 'second'], onEditQueued })} />)
+    fireEvent.click(screen.getAllByTitle('Edit queued message')[0])
+    fireEvent.input(screen.getByRole('textbox'), { target: { value: 'first, changed' } })
+
+    view.rerender(<ConversationTimeline {...props({ queued: ['second'], onEditQueued })} />)
+    expect(view.container.querySelector('textarea')).toBeNull()
+    fireEvent.click(screen.getByTitle('Edit queued message'))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('second')
+  })
+
+  it('reads a queue with no sources as typed', () => {
+    const view = render(<ConversationTimeline {...props({ queued: ['one', 'two'] })} />)
+    expect(view.container.querySelectorAll('.msg.user.queued')).toHaveLength(2)
+  })
+})
+
 describe('ConversationTimeline queued messages', () => {
   it('routes removal with the queued message index', () => {
     const onCancelQueued = vi.fn()

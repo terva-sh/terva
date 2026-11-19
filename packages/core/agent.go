@@ -178,7 +178,7 @@ type Agent struct {
 	sideChannelUsageObs    []func(source string, u, cumulative provider.Usage)
 	transcriptCompactedObs []func(messages []provider.Message, res CompactResult)
 	imageExcludedObs       []func(sha256Hex string)
-	queueDrainedObs        []func(drained []string)
+	queueDrainedObs        []func(drained []QueuedMessage)
 	retryObs               []func(RetryRecord)
 	tailObs                []func(TailRecord)
 	dispatchObs            []DispatchObserver
@@ -364,7 +364,33 @@ type Agent struct {
 	// boundaries: before the next model call after a tool batch, or
 	// after a text-only assistant turn finishes. It never interrupts
 	// a running tool or cancels an in-flight provider request.
-	queued []string
+	queued []QueuedMessage
+}
+
+// QueuedMessage is one entry of the agent's queue: a text, and what wrote it.
+//
+// Source is empty when a person typed the text. Any other value names the
+// part of the host that wrote it, in the "area:kind" form of the other
+// [MetaSource] values, such as "swarm:recap". The message that the text
+// becomes carries the value under MetaSource, so the stored transcript and
+// every front end can tell a host's report from a person's words.
+//
+// 🚨 A source is a label and gives no authority. The user-message guard
+// judges a queued text whatever its source. A host takes a source from a
+// client, so a source that passed the guard would let a client pass it.
+type QueuedMessage struct {
+	Text   string
+	Source string
+}
+
+// Meta is the message metadata that records m's source: nil for a person's
+// text. A host that starts a turn from a queued entry hands it to Prompt in
+// [UserMessageExtras], so the message says the same as one the loop appends.
+func (m QueuedMessage) Meta() map[string]string {
+	if m.Source == "" {
+		return nil
+	}
+	return map[string]string{MetaSource: m.Source}
 }
 
 // agentEpochSeq hands each new agent a distinct transcript-epoch base
@@ -473,28 +499,37 @@ func (a *Agent) SessionIdentity() (id, path string) {
 // the transcript mutex briefly. Empty/whitespace-only messages are
 // ignored.
 func (a *Agent) QueueMessage(text string) bool {
+	return a.QueueMessageFrom("", text)
+}
+
+// QueueMessageFrom is QueueMessage for a text that the host wrote. source
+// names the writer, and an empty source means a person. See [QueuedMessage].
+func (a *Agent) QueueMessageFrom(source, text string) bool {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false
 	}
 	a.mu.Lock()
-	a.queued = append(a.queued, text)
+	a.queued = append(a.queued, QueuedMessage{Text: text, Source: strings.TrimSpace(source)})
 	a.mu.Unlock()
 	return true
 }
 
-// RequeueFront puts text at the FRONT of the queue. Hosts use it to
+// RequeueFront puts m at the FRONT of the queue. Hosts use it to
 // re-arm a prompt that must run next — e.g. the message that
 // triggered an auto-compaction is requeued so it fires as soon as the
 // condensed transcript is ready, ahead of anything the user queued
 // while waiting. Empty/whitespace-only messages are ignored.
-func (a *Agent) RequeueFront(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
+//
+// It takes the entry and not the text, so that a text a host shifted out and
+// puts back keeps its source.
+func (a *Agent) RequeueFront(m QueuedMessage) bool {
+	m.Text = strings.TrimSpace(m.Text)
+	if m.Text == "" {
 		return false
 	}
 	a.mu.Lock()
-	a.queued = append([]string{text}, a.queued...)
+	a.queued = append([]QueuedMessage{m}, a.queued...)
 	a.mu.Unlock()
 	return true
 }
@@ -503,24 +538,24 @@ func (a *Agent) RequeueFront(text string) bool {
 // Hosts use it when no agent loop is running to consume the queue
 // in submission order: pop the head to start a fresh turn, and let
 // that turn's loop drain the rest at its safe boundaries.
-func (a *Agent) ShiftQueuedMessage() (string, bool) {
+func (a *Agent) ShiftQueuedMessage() (QueuedMessage, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(a.queued) == 0 {
-		return "", false
+		return QueuedMessage{}, false
 	}
-	text := a.queued[0]
+	m := a.queued[0]
 	a.queued = a.queued[1:]
-	return text, true
+	return m, true
 }
 
 // PendingQueuedMessages returns a snapshot of user messages waiting
 // to be injected. Used by hosts to render the visible "sliding in"
 // chips without consuming them.
-func (a *Agent) PendingQueuedMessages() []string {
+func (a *Agent) PendingQueuedMessages() []QueuedMessage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	out := make([]string, len(a.queued))
+	out := make([]QueuedMessage, len(a.queued))
 	copy(out, a.queued)
 	return out
 }
@@ -536,14 +571,14 @@ func (a *Agent) QueuedMessageCount() int {
 // DrainQueuedMessages discards and returns every queued message.
 // Hosts use this on explicit cancel/clear so stale follow-ups do
 // not run after the user aborted the turn.
-func (a *Agent) DrainQueuedMessages() []string {
+func (a *Agent) DrainQueuedMessages() []QueuedMessage {
 	return a.drainQueuedMessages()
 }
 
-func (a *Agent) drainQueuedMessages() []string {
+func (a *Agent) drainQueuedMessages() []QueuedMessage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	out := make([]string, len(a.queued))
+	out := make([]QueuedMessage, len(a.queued))
 	copy(out, a.queued)
 	a.queued = nil
 	return out
@@ -552,20 +587,68 @@ func (a *Agent) drainQueuedMessages() []string {
 // SetQueuedMessages atomically replaces the pending queue, preserving order and
 // dropping empty/whitespace-only entries. Hosts use it to edit or cancel queued
 // messages before they inject (the queue.set control-plane command).
+//
+// It takes texts, because the caller is a person who edits a list. A text that
+// is still in the queue keeps its source, and each queued entry gives its
+// source to one text at most. A text with no match is new or was changed, so
+// it is the person's text and has no source.
+//
+// ⚠️ Texts are matched in queue order, and an entry has no identity but its
+// text. When two queued entries have the same text and different sources, and
+// the caller keeps one of them, the first in the queue gives its source. That
+// can be the wrong one of the two. A caller that knows the source of each
+// entry it keeps calls SetQueuedEntries, which has no such case.
 func (a *Agent) SetQueuedMessages(texts []string) {
-	var cleaned []string
-	for _, t := range texts {
-		if t = strings.TrimSpace(t); t != "" {
-			cleaned = append(cleaned, t)
-		}
+	entries := make([]QueuedMessage, len(texts))
+	for i, t := range texts {
+		entries[i].Text = t
 	}
-	a.mu.Lock()
-	a.queued = cleaned
-	a.mu.Unlock()
+	a.replaceQueue(entries, false)
 }
 
-func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(AgentEvent)) {
-	for _, text := range texts {
+// SetQueuedEntries is SetQueuedMessages for a caller that says which entries
+// it keeps: the text and the source of each one. Two queued entries with the
+// same text and different sources are then two different entries, so a
+// removal of one of them never moves its source to the other.
+//
+// 🚨 The caller confirms a source and cannot give one. An entry keeps its
+// source only when the queue holds an entry with that text and that source,
+// and each queued entry answers for one given entry at most. Every other
+// entry is new or was changed, so it is the person's text and has no source.
+func (a *Agent) SetQueuedEntries(entries []QueuedMessage) {
+	a.replaceQueue(entries, true)
+}
+
+// replaceQueue swaps the queue for entries, with blank texts dropped. A given
+// entry keeps a source only from a queued entry that it matches: by text and
+// source when bySource is set, and by text alone when it is not.
+func (a *Agent) replaceQueue(entries []QueuedMessage, bySource bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	old := a.queued
+	used := make([]bool, len(old))
+	var next []QueuedMessage
+	for _, e := range entries {
+		m := QueuedMessage{Text: strings.TrimSpace(e.Text)}
+		if m.Text == "" {
+			continue
+		}
+		want := strings.TrimSpace(e.Source)
+		for i, o := range old {
+			if used[i] || o.Text != m.Text || (bySource && o.Source != want) {
+				continue
+			}
+			used[i], m.Source = true, o.Source
+			break
+		}
+		next = append(next, m)
+	}
+	a.queued = next
+}
+
+func (a *Agent) appendQueuedAsUser(queued []QueuedMessage, synthetic bool, sink func(AgentEvent)) {
+	for _, q := range queued {
+		text := q.Text
 		// Genuine queued prompts pass through the same guard as the
 		// initial prompt, so a user_message intercept can't be bypassed
 		// by typing while a turn is mid-flight. A rejected one is skipped
@@ -597,6 +680,10 @@ func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(Age
 		// from the transcript). See WireMessage.Synthetic.
 		if synthetic {
 			msg.Meta = map[string]string{MetaSynthetic: "true"}
+		} else if q.Source != "" {
+			// 🔑 The source is the one record that a person did not type this
+			// text. The guard above still judged it. See QueuedMessage.
+			msg.Meta = q.Meta()
 		}
 		a.mu.Lock()
 		a.messages = append(a.messages, msg)
@@ -604,7 +691,7 @@ func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(Age
 		a.mu.Unlock()
 		a.fireMessageAppended(msg)
 		if sink != nil {
-			sink(EvUserMessage{Message: msg, Synthetic: synthetic})
+			sink(EvUserMessage{Message: msg, Synthetic: synthetic, Source: msg.Meta[MetaSource]})
 		}
 	}
 }
@@ -1308,7 +1395,7 @@ func (a *Agent) promptExtra(ctx context.Context, text string, images []provider.
 	revAfterUser := a.rev
 	a.mu.Unlock()
 	a.fireMessageAppended(user)
-	sink(EvUserMessage{Message: user})
+	sink(EvUserMessage{Message: user, Source: user.Meta[MetaSource]})
 
 	err := a.runLoop(ctx, sink)
 
@@ -1332,7 +1419,12 @@ func (a *Agent) promptExtra(ctx context.Context, text string, images []provider.
 	// after the removal by construction, but a host that re-derived "it was the
 	// last one" would delete the wrong durable row the day this rule changes,
 	// and silently.
-	if errors.Is(context.Cause(ctx), ErrUserInterrupted) {
+	//
+	// 🔑 A prompt with a source stays. The host wrote it, such as the report on
+	// a batch of sub-agents, and nobody can send it again. A withdrawal would
+	// also hand the text to a composer as the person's own words, which is the
+	// fault that a source exists to prevent.
+	if errors.Is(context.Cause(ctx), ErrUserInterrupted) && user.Meta[MetaSource] == "" {
 		if idx, ok := a.withdrawLastUserMessage(revAfterUser); ok {
 			// The prompt goes back to the composer, so anything it consumed on
 			// the way out has to go back too. The engine consumed nothing a host
@@ -2051,7 +2143,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		if ctx.Err() == nil && stop == provider.StopEnd {
 			if nudge, cause, ok := fireContinuationGate(gates, gateFires, stop); ok {
 				sink(EvContinuation{Cause: cause})
-				a.appendQueuedAsUser([]string{nudge}, true, sink)
+				a.appendQueuedAsUser([]QueuedMessage{{Text: nudge}}, true, sink)
 				pin = a.repinForContinuation(pin, vis, repin)
 				continue
 			}

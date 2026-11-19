@@ -396,6 +396,32 @@ describe('applyEvent — error, notice, and synthetic items', () => {
     const [fromSnapshot] = itemsFromMessages([{ role: 'user', synthetic: true, content: [{ type: 'text', text: 'nudge' }] }], LIVE)
     expect(fromSnapshot).toMatchObject({ kind: 'system', text: 'nudge' })
   })
+
+  // A text that terva queued, such as the report on a batch of sub-agents,
+  // arrives in the user role. It names its writer, and it must never make the
+  // person's own bubble, live or after a reload.
+  it('renders a user message with a source as a note that names its writer', () => {
+    const recap = { role: 'user', source: 'swarm:recap', content: [{ type: 'text', text: '[auto-swarm update] done' }] }
+    const [live] = applyEvent([], { type: 'user_message', message: recap })
+    expect(live).toMatchObject({ kind: 'system', text: '[auto-swarm update] done', source: 'swarm:recap' })
+    const [fromSnapshot] = itemsFromMessages([recap], LIVE)
+    expect(fromSnapshot).toMatchObject({ kind: 'system', text: '[auto-swarm update] done', source: 'swarm:recap' })
+
+    // The positive control: the same text from a person is the person's.
+    const typed = { role: 'user', content: [{ type: 'text', text: '[auto-swarm update] done' }] }
+    expect(applyEvent([], { type: 'user_message', message: typed })[0]).toMatchObject({ kind: 'user' })
+    expect(itemsFromMessages([typed], LIVE)[0]).toMatchObject({ kind: 'user' })
+  })
+
+  // A direction is a person's own "/direct" text. A text from terva that
+  // happens to start the same way is still a note.
+  it('does not read a text with a source as a direction', () => {
+    const [item] = applyEvent([], {
+      type: 'user_message',
+      message: { role: 'user', source: 'talkoot:delivery', content: [{ type: 'text', text: '[direction] go north' }] },
+    })
+    expect(item).toMatchObject({ kind: 'system', source: 'talkoot:delivery' })
+  })
 })
 
 // The stuck-loop hatch's live events (EvStall / EvEscalation) render as in-stream

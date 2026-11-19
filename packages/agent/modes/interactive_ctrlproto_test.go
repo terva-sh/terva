@@ -119,6 +119,8 @@ type fakeCarrier struct {
 	onSurface func(id string)
 	// setQueues records every SetQueue call, in order (guarded by mu).
 	setQueues [][]string
+	// setQueueSources is the Sources list of each of those calls, by position.
+	setQueueSources [][]string
 	// usage is the usage.snapshot fixture; usageCalls records each call's
 	// refresh flag, usageErr fails every call (all guarded by mu).
 	usage      ctrlproto.UsageInfo
@@ -175,17 +177,18 @@ func (f *fakeCarrier) Prompt(ctx context.Context, sess string, p ctrlproto.Promp
 	return nil
 }
 
-func (f *fakeCarrier) Queue(ctx context.Context, sess, text string) error {
-	f.queued <- text
+func (f *fakeCarrier) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
+	f.queued <- p.Text
 	return nil
 }
 
 // SetQueue records the list the TUI committed. The real daemon answers with a
 // queue_updated broadcast; tests that care feed one back through the stream.
-func (f *fakeCarrier) SetQueue(ctx context.Context, sess string, texts []string) error {
+func (f *fakeCarrier) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.setQueues = append(f.setQueues, append([]string(nil), texts...))
+	f.setQueues = append(f.setQueues, append([]string(nil), p.Texts...))
+	f.setQueueSources = append(f.setQueueSources, append([]string(nil), p.Sources...))
 	return nil
 }
 

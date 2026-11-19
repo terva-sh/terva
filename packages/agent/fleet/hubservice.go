@@ -215,20 +215,20 @@ func (s *HubService) Prompt(ctx context.Context, sess string, p ctrlproto.Prompt
 	return svc.Prompt(ctx, id, p)
 }
 
-func (s *HubService) Queue(ctx context.Context, sess, text string) error {
+func (s *HubService) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
 	svc, id, err := s.command(sess)
 	if err != nil {
 		return err
 	}
-	return svc.Queue(ctx, id, text)
+	return svc.Queue(ctx, id, p)
 }
 
-func (s *HubService) SetQueue(ctx context.Context, sess string, texts []string) error {
+func (s *HubService) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
 	svc, id, err := s.command(sess)
 	if err != nil {
 		return err
 	}
-	return svc.SetQueue(ctx, id, texts)
+	return svc.SetQueue(ctx, id, p)
 }
 
 func (s *HubService) Cancel(ctx context.Context, sess string) error {

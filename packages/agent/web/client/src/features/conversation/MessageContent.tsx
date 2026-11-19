@@ -1,4 +1,5 @@
 import { t, tn } from '../../i18n'
+import { sourceLabel } from '../../platform/conversation/source'
 import type { Item } from '../../platform/conversation/store'
 import type { WireAttachment } from '../../platform/ctrlproto/types'
 import { CopyButton } from '../../ui/CopyButton'
@@ -164,6 +165,16 @@ export const MessageContent = memo(function MessageContent({
     case 'clear':
       return <ClearDivider item={item} onReveal={onReveal} revealing={revealing} />
     case 'system':
+      // A text that terva queued, such as the report on a batch of sub-agents.
+      // It names its writer and keeps its line breaks, because a report is
+      // many lines.
+      if (item.source)
+        return (
+          <div class="sys-note sourced">
+            <span class="sys-tag">{t('from terva · %s', sourceLabel(item.source))}</span>
+            <div class="sys-body">{item.text}</div>
+          </div>
+        )
       // Host-injected nudge (e.g. continue-on-open-work) — de-emphasized so it
       // doesn't read as something the user typed.
       return (

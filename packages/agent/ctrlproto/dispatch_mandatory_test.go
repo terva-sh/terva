@@ -152,13 +152,13 @@ func (r *recorder) Prompt(_ context.Context, sess string, p PromptParams) error 
 	return nil
 }
 
-func (r *recorder) Queue(_ context.Context, sess, text string) error {
-	r.note("Queue", sess, text)
+func (r *recorder) Queue(_ context.Context, sess string, p QueueParams) error {
+	r.note("Queue", sess, p)
 	return nil
 }
 
-func (r *recorder) SetQueue(_ context.Context, sess string, texts []string) error {
-	r.note("SetQueue", sess, texts)
+func (r *recorder) SetQueue(_ context.Context, sess string, p QueueSetParams) error {
+	r.note("SetQueue", sess, p)
 	return nil
 }
 
@@ -403,8 +403,12 @@ func mandatoryDispatchCases() []dispatchCase {
 			"Prompt",
 			promptArgs{Text: "prompted", Images: []Image{{MimeType: "image/png", Data: []byte("png-bytes")}}},
 		},
-		{MethodQueue, QueueParams{Text: "queued"}, "Queue", "queued"},
-		{MethodQueueSet, QueueSetParams{Texts: []string{"a", "b"}}, "SetQueue", []string{"a", "b"}},
+		// The source goes with the text. A verb that bound the text alone
+		// would turn every report from terva into the person's own words.
+		{MethodQueue, QueueParams{Text: "queued", Source: QueueSourceSwarmRecap}, "Queue", QueueParams{Text: "queued", Source: QueueSourceSwarmRecap}},
+		// The sources go with the texts. They say which of two equal texts
+		// the client kept.
+		{MethodQueueSet, QueueSetParams{Texts: []string{"a", "b"}, Sources: []string{"", QueueSourceSwarmRecap}}, "SetQueue", QueueSetParams{Texts: []string{"a", "b"}, Sources: []string{"", QueueSourceSwarmRecap}}},
 		{MethodCancel, nil, "Cancel", nil},
 		{MethodCompact, nil, "Compact", nil},
 		{MethodClear, nil, "Clear", nil},

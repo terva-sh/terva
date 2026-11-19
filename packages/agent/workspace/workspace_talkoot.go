@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/agent/tools"
@@ -555,7 +556,7 @@ func (d talkootNativeDriver) deliver(talkootID string, m talkoot.Member, text st
 		return fmt.Errorf("member %s: %w", m.ID, err)
 	}
 	if r == nil {
-		s.queue(text)
+		s.queueFrom(ctrlproto.QueueSourceTalkootDelivery, text)
 		return nil
 	}
 	// 🚨 The router leaves the chain alone for a ReadDriver. A delivery whose

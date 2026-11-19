@@ -241,8 +241,8 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | Method | Params | Effect |
 |---|---|---|
 | `prompt` | `{text, images?}` | start a turn; returns when *accepted*, progress streams to subscribers (`busy` → `error`) |
-| `queue` | `{text}` | enqueue for the next safe boundary of the running turn (the interject / multi-device story) |
-| `queue.set` | `{texts}` | replace the whole pending queue (edit/cancel queued messages); empty clears |
+| `queue` | `{text, source?}` | enqueue for the next safe boundary of the running turn (the interject / multi-device story); `source` names the writer of a text that no person typed, see [The source of a queued message](#the-source-of-a-queued-message) |
+| `queue.set` | `{texts, sources?}` | replace the whole pending queue (edit/cancel queued messages); empty clears; `sources` says which entries stay, see [The source of a queued message](#the-source-of-a-queued-message) |
 | `cancel` | — | interrupt the active turn; no-op when idle |
 | `compact` | — | summarize + replace the transcript; clients get a fresh snapshot |
 | `clear` | — | wipe the transcript (no summary), same session |
@@ -304,6 +304,7 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `sessions.realize` | `{commit?, proposal?, provider?, model?}` → `{proposal?, session?}` | turn a cartographer conversation into a playable world. The `next_scene` shape: PROPOSE re-reads the converged planning chat with one bounded Kartoittaja call and returns the finished structure (World, protagonist, NPC roster, lore, cold open) plus an attribution ledger of what the author gave versus what the model invented, creating nothing; COMMIT imports the roster as cards and seeds a play session with the protagonist as the bound **user persona** (not a roster card) and the cold open standing in for the greeting, spending nothing. A commit does not persist a library World; that stays the explicit `worlds.save` act. Optional (a `DoctorController`) |
 | `workflows.list` | → `{runs:[WorkflowRunInfo]}` | every workflow run on the host, newest first: status (`incomplete`\|`running`\|`crashed`\|`done`\|`failed`, the first two earned by the heartbeat a running process restamps on its record), completed-of-total agents, in-flight count, cost, and whether resuming would replay real work (a `running` run is not resumable; a `failed` one can be). Session-independent; optional, served only by a `WorkflowsController` |
 | `workflows.get` | `{id}` → `{run, script?, args?, results?}` | one run opened: the record, **the script as it ran** (recorded at launch, not re-read from disk), and each journaled result with its label and byte size. The id is path-validated, because it names a directory under the run root and arrives from a network client |
+| `timers.list` | → `{timers:[TimerInfo], problem?}` | the daemon's timers, the soonest first. Each row carries the owner, the id, a label, the schedule as text (`every 15m`, `weekdays 07:30`), `next`, `last_fired`, and a `problem` when the timer waits on something, such as an owner that this daemon does not run. The top-level `problem` says why no timer can fire: a second daemon in the same directory, or a timers file that does not read or write. Read-only. An owner inside the daemon sets and cancels its timers, and no verb does. Session-independent; optional, served only by a `TimersController`. See [the timer service](scheduled-jobs.md#the-daemons-timer-service) |
 | `shared.list` | → `{files:[SharedFileEntry]}` | the files this session's agent handed to the user with `share_file`, newest first: the record the transcript already carries (id, name, kind, mime, size, caption, expiry) plus `path`, where the bytes sit on the **daemon's** disk. A session that shared nothing returns an empty list, not an error. `path` is host-local and is what lets a client on the daemon's own machine open the file in a system viewer or put a real path on the clipboard; a client elsewhere must ignore it and `shared.fetch` instead, because a path from another machine names nothing it can reach. Optional (a `SharedFilesController`) |
 | `shared.fetch` | `{id}` → `{id, name, mime?, data?}` | one shared file's bytes, so a client can preview it, save it, or hand it to a viewer, and the only way a **remote** client reaches the content at all. Bounded by `MaxSharedFetchBytes` (8 MiB): the store holds files far larger, which are fine to list and fine over the web route's range requests but not fine inlined in a control frame both ends read whole. Past that bound a caller has `path` (same host) or the web `/shared/` route (any host). Read-only, and the id resolves only within the frame's own session |
 
@@ -464,8 +465,8 @@ where a worker member's approval waits. Reads stay open
 
 | Method | Params → Result | Effect |
 |---|---|---|
-| `talkoot.list` | → `{talkoots:[{id, home?, running, problem?, name?, title?, color?, own_color?, state?}]}` | every talkoot on the host. `running` is true for a talkoot this daemon runs; a talkoot runs in the daemon of its `home` directory. `problem` says why one that should run does not. `name` and `title` come from the roster, and `color` is the team mark's colour with the default filled in. A roster that cannot be read leaves all three empty. `own_color` is the colour the roster sets. `state` is the team's combined state for a talkoot this daemon runs, as of its last `talkoot_status` event. A state change sends `talkoots_changed`, so a list that reads again on it follows the state. A talkoot that has just started may have no state yet. Read-only |
-| `talkoot.get` | `{id}` → `{TalkootView}` | a running talkoot: its roster fields, the `text` of its `talkoot.md`, each member with its roster entry (a narrowed member carries `tools`), its `mark` (`shape` and `color`, with the defaults from its persona and its id filled in) and `own_mark` when the roster sets one, its session once it has one, and its `status` (`presence`, the member's one state: `idle`, `working`, `waiting`, `paused`, or `offline`; `working`, the `tool` its turn runs now, `paused`, the joined reasons of every pause that holds it, `pauses`, their kinds: `person`, `spend`, `turns`, `team`, `cost`, `guard`, `room`, or `failed`; `idle`, a worker stopped for idleness; today's `spend_usd` and `turns`; `expression`, the pose the member's face holds, empty for the default pose of its presence, with `intensity` 1 for the strong form of the pose, and `expression_cause`, the signals behind it, for debugging and not for drawing), and `held`, the members with a delivery that waits. The view also carries the team mark: `color`, with the default filled in, `own_color`, the colour the roster sets, and `state`, the team's combined state. The state is `offline` when every member is offline. Otherwise it is `needs-you` when any member waits on a person or stopped on a failure, then `busy` when any member works. It is `paused` when every member that listens is paused, and `online` for any other mix. Read-only |
+| `talkoot.list` | → `{talkoots:[{id, home?, running, problem?, name?, title?, color?, own_color?, state?, chat?}]}` | every talkoot on the host. `running` is true for a talkoot this daemon runs; a talkoot runs in the daemon of its `home` directory. `problem` says why one that should run does not. `name` and `title` come from the roster, and `color` is the team mark's colour with the default filled in. A roster that cannot be read leaves all three empty. `own_color` is the colour the roster sets. `state` is the team's combined state for a talkoot this daemon runs, as of its last `talkoot_status` event. A state change sends `talkoots_changed`, so a list that reads again on it follows the state. A talkoot that has just started may have no state yet. `chat` is the chat bridge bound to the talkoot, when user configuration set one: its `state` (`connecting`, `connected`, or `error`), its `connector`, the `username` it connected as, the `paired_id` of the account that may write through it, and the `error` of a failed dial. A change to the bridge sends `talkoots_changed` too. Read-only |
+| `talkoot.get` | `{id}` → `{TalkootView}` | a running talkoot: its roster fields, the `text` of its `talkoot.md`, each member with its roster entry (a narrowed member carries `tools`), its `mark` (`shape` and `color`, with the defaults from its persona and its id filled in) and `own_mark` when the roster sets one, its session once it has one, and its `status` (`presence`, the member's one state: `idle`, `working`, `waiting`, `paused`, or `offline`; `working`, the `tool` its turn runs now, `paused`, the joined reasons of every pause that holds it, `pauses`, their kinds: `person`, `spend`, `turns`, `team`, `cost`, `guard`, `room`, or `failed`; `idle`, a worker stopped for idleness; today's `spend_usd` and `turns`; `expression`, the pose the member's face holds, empty for the default pose of its presence, with `intensity` 1 for the strong form of the pose, and `expression_cause`, the signals behind it, for debugging and not for drawing), and `held`, the members with a delivery that waits. The view also carries the team mark: `color`, with the default filled in, `own_color`, the colour the roster sets, and `state`, the team's combined state. The state is `offline` when every member is offline. Otherwise it is `needs-you` when any member waits on a person or stopped on a failure, then `busy` when any member works. It is `paused` when every member that listens is paused, and `online` for any other mix. `chat` is the same bridge state `talkoot.list` gives. Read-only |
 | `talkoot.room` | `{id, before?, limit?}` → `{lines, next?, total}` | a page of the room, oldest line first, read backward from `before` (zero is the newest page). `next` is the `before` of the page before this one. A line keeps its type: `envelope`, `turn`, `guard`, `resume`, `delivery`, `seat`, `roster`, `answer`, `intro`, a signal, or `damaged` for a line that did not parse. A signal records what happened to `member`, for the expression engine to replay. A `tool_error` line names the failed `tool`, its call id in `ref`, and its error in `reason`. A native member's call that a person refused at its card writes no `tool_error` line, because the `card_close` line records the refusal. A `retry` line counts the failed `attempt` from 1, with the provider's error in `reason`. A `card_open` line and a `card_close` line name the `card`, `permission` or `question`, with its id in `ref`. A permission card's `card_open` names its `tool`. A roster line that changed the team colour holds `color_before` and `color_after`, each with the default filled in. A `card_close` line says its `outcome`: `approved`, `denied`, `answered`, `expired`, or `cancelled`. An envelope of kind `proposal` records a roster proposal, and it is addressed to no member. An envelope of kind `intro` asks one member to introduce itself, in the name of the person who approved its add or ran the kickoff, and its body is the daemon's instruction. An `intro` line is a member's plain introduction card in `text`, built from its roster entry, for a member that took no introduction turn. An `answer` line records a person's answer to the questions `member` asked: `ref` is its id, and `answers` holds each `question` with the options `chosen`, a `note`, or `declined`, and `omitted` counts the choices past the line's bound. A text cut to the line's bound ends in an ellipsis. An envelope whose `refs` hold `answer:<id>` carries each cited answer in `cites`, as `{answer, asker, at, answers}`. An envelope cites at most four answers. Its seal stays in the room. Read-only |
 | `talkoot.inbox` | `{id}` → `{cards:[{session, member, kind, id, at, permission?, ask?, proposal?, kickoff?}]}` | every question, approval, roster proposal, and kickoff that waits for a person, oldest first. `kind` is `permission`, `ask`, `proposal`, or `kickoff`. A permission or an ask card holds the same request the member's session shows, and you answer it with `approve` or `answer` on its `session`: one answer resolves it in both places. A worker member has no session of its own, so its approval card names the talkoot's address, `#talkoot:<id>`, as its `session`, and `approve` there answers the worker. A proposal card has no session, and you decide it with `talkoot.decide`. A kickoff card waits on a new team, with the id `kickoff` and no session: you run or skip it with `talkoot.kickoff`. Read-only |
 | `talkoot.trace` | `{id, member}` → `{member, seed, entries:[{at, signal, expression?, intensity?, beat?, toward?, cause?}]}` | the member's expression trace, oldest entry first, to debug a face. Each entry is a signal the expression engine read, and what the signal made the face show. The daemon keeps the last 64 entries for each member in memory, and a restart rebuilds them from the room. `seed` is the engine's seed, which follows from the talkoot's id. It is 64 bits, sent as a decimal string. A member with no signal has no entries. Read-only |
@@ -552,7 +553,7 @@ must render and answer:
 | `ask_resolved` | `resolved:{ask_id}` | the question was answered |
 | `snapshot` | `snapshot:{…}` | sent only to a **new subscriber**: transcript, pending permissions/asks, queue, skills, `busy`, and the tail span's variant metadata (`tail:{span_start, variants, active}`, so a reconnecting client redraws the swipe arrows); render history before the live stream |
 | `session_updated` | `info:{SessionInfo}` | metadata changed (title, model, cost, `trusted`); refresh headers & the session list |
-| `queue_updated` | `queued:[…]` | the pending queue changed (absent = cleared) |
+| `queue_updated` | `queued:[…]`, `queued_sources?:[…]` | the pending queue changed (absent = cleared); `queued_sources` names the writer of each text by position |
 | `surface_updated` | `surface_id` | a pane's content changed; re-fetch with `surface.get` |
 | `surfaces_changed` | — | the set of panes changed; re-list |
 | `sessions_changed` | — | the set of sessions changed (a create, a rename, a delete, a cold session that went live), or a session started or stopped waiting on a person. Re-run `sessions.list`. On the workspace address |
@@ -567,7 +568,7 @@ must render and answer:
 | `talkoot_roster` | `talkoot:{id, line}` | the roster changed; the line names the person in `by`, each member before and after in `changes`, each team field before and after in `team`, and, for an approved proposal, the `proposal` and its `proposer`. A line from before `changes` has only `by` and `ref`. Re-read with `talkoot.get` |
 | `talkoot_inbox` | `talkoot:{id, card}` | a card opened in the inbox: a question, an approval, a proposal, or a new team's kickoff, or a proposal whose approval was refused, now with its `problem`; `card` is a `talkoot.inbox` card, on the room's address |
 | `talkoot_inbox_resolved` | `talkoot:{id, card}` | a card left the inbox, because a person answered or decided it, or the member's turn ended first; `card` names the `session`, `member`, `kind`, and `id`, and holds no request |
-| `talkoots_changed` | none | the talkoot list changed: a talkoot started on this daemon, its roster changed, or its team state changed. Re-list with `talkoot.list`. On `#workspace`, and only to a client that negotiated the `talkoot` group |
+| `talkoots_changed` | none | the talkoot list changed: a talkoot started on this daemon, its roster changed, its team state changed, or its chat bridge changed state. Re-list with `talkoot.list`. On `#workspace`, and only to a client that negotiated the `talkoot` group |
 
 `TalkootView.team_budget_waived` reports the persistent aggregate cost waiver.
 An absent value is false. A roster line's `reason` records whether the person
@@ -616,6 +617,60 @@ Example: a tool-approval round-trip:
 {"kind":"event","sess":"s1","event":{"type":"permission_resolved",
  "resolved":{"call_id":"call_01"}}}    // other clients dismiss their dialog
 ```
+
+### The source of a queued message
+
+A queued text is a person's words unless it says otherwise. terva also queues
+texts of its own: the report on a batch of sub-agents, and a message that a
+team's room delivers to a member. Each of those carries a source, so that no
+client shows it as something the person typed.
+
+A source is one short word in the form `area:kind`. terva uses two:
+
+| Source | The text |
+|---|---|
+| `swarm:recap` | the report on the sub-agents that the session started |
+| `talkoot:delivery` | a message that a team's room delivered to this member |
+
+The source appears in three places:
+
+- **`queue` takes it.** A client that sends what a person typed leaves
+  `source` out. A value must be at most 64 bytes of lower-case letters,
+  digits, `:`, `.`, `_` and `-`, and any other value fails the call with
+  `bad_request`. `stage:directed` and `stage:routed` fail too, because they
+  mark an authored line on an assistant message.
+- **The queue view carries it.** `queued` stays a list of texts, in
+  `queue_updated` and in the snapshot. `queued_sources` is a second list of
+  the same length, and an empty value in it means a person's text. The second
+  list is absent when no queued text has a source, so a client that reads
+  `queued` alone still shows the whole queue.
+- **The message carries it.** The user message that a queued text becomes has
+  `source` set (see [rpc.md](rpc.md#message-shape)), in the live event and in
+  every snapshot after it.
+
+Show a text with a source as a note from terva, with the source as its label,
+and show a value you do not know the same way. Do not offer to edit it as the
+person's draft.
+
+Send `sources` with `queue.set`: the source of each text you keep, by
+position, as `queue_updated` gave it, and `""` for a text that the person
+typed or changed. The list has the length of `texts`. It says which entries
+stay. A person can type a text that equals a queued report, and the texts
+alone cannot say which of the two was removed.
+
+`queue.set` confirms a source and cannot give one. A text keeps a source only
+when the queue holds an entry with that text and that source. Every other
+text becomes the person's own, and a text that the person changed is one of
+those.
+
+A client that sends no `sources` is an older one. The session then matches by
+text alone: a text that is still in the queue keeps the source it had, and
+when two queued entries have the same text, the first in the queue gives its
+source. That can be the wrong one of the two.
+
+A source is a label and gives no authority. The session's `user_message`
+guard judges a queued text whatever its source says, because the value comes
+from a client.
 
 ### Error codes
 

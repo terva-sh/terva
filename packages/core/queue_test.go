@@ -130,6 +130,14 @@ func queueTestContains(xs []string, want string) bool {
 	return false
 }
 
+func queuedTexts(queued []QueuedMessage) []string {
+	out := make([]string, len(queued))
+	for i, m := range queued {
+		out[i] = m.Text
+	}
+	return out
+}
+
 func TestQueueMessageSnapshotShiftAndDrain(t *testing.T) {
 	a := newTestAgent(nil, "fake", "", Registry{})
 	if a.QueueMessage("   ") {
@@ -137,13 +145,13 @@ func TestQueueMessageSnapshotShiftAndDrain(t *testing.T) {
 	}
 	a.QueueMessage("one")
 	a.QueueMessage("two")
-	if got := a.PendingQueuedMessages(); len(got) != 2 || got[0] != "one" || got[1] != "two" {
+	if got := queuedTexts(a.PendingQueuedMessages()); len(got) != 2 || got[0] != "one" || got[1] != "two" {
 		t.Fatalf("PendingQueuedMessages = %v; want [one two]", got)
 	}
-	if text, ok := a.ShiftQueuedMessage(); !ok || text != "one" {
-		t.Fatalf("ShiftQueuedMessage = %q,%v; want one,true", text, ok)
+	if m, ok := a.ShiftQueuedMessage(); !ok || m.Text != "one" {
+		t.Fatalf("ShiftQueuedMessage = %q,%v; want one,true", m.Text, ok)
 	}
-	if got := a.DrainQueuedMessages(); len(got) != 1 || got[0] != "two" {
+	if got := queuedTexts(a.DrainQueuedMessages()); len(got) != 1 || got[0] != "two" {
 		t.Fatalf("DrainQueuedMessages = %v; want [two]", got)
 	}
 	if got := a.QueuedMessageCount(); got != 0 {
@@ -157,7 +165,7 @@ func TestSetQueuedMessages(t *testing.T) {
 	a.QueueMessage("two")
 	// Replace wholesale (edit/cancel), trimming blanks and dropping empties.
 	a.SetQueuedMessages([]string{" edited ", "", "   ", "kept"})
-	if got := a.PendingQueuedMessages(); len(got) != 2 || got[0] != "edited" || got[1] != "kept" {
+	if got := queuedTexts(a.PendingQueuedMessages()); len(got) != 2 || got[0] != "edited" || got[1] != "kept" {
 		t.Fatalf("PendingQueuedMessages = %v; want [edited kept]", got)
 	}
 	// An empty slice clears the queue.
@@ -169,19 +177,19 @@ func TestSetQueuedMessages(t *testing.T) {
 
 func TestQueueFrontOps(t *testing.T) {
 	a := newTestAgent(nil, "fake", "", Registry{})
-	if a.RequeueFront("  ") {
+	if a.RequeueFront(QueuedMessage{Text: "  "}) {
 		t.Fatal("blank requeue accepted")
 	}
 	a.QueueMessage("later")
-	a.RequeueFront("first")
-	if got := a.PendingQueuedMessages(); len(got) != 2 || got[0] != "first" || got[1] != "later" {
+	a.RequeueFront(QueuedMessage{Text: "first"})
+	if got := queuedTexts(a.PendingQueuedMessages()); len(got) != 2 || got[0] != "first" || got[1] != "later" {
 		t.Fatalf("PendingQueuedMessages = %v; want [first later]", got)
 	}
-	if text, ok := a.ShiftQueuedMessage(); !ok || text != "first" {
-		t.Fatalf("ShiftQueuedMessage = %q,%v; want first,true", text, ok)
+	if m, ok := a.ShiftQueuedMessage(); !ok || m.Text != "first" {
+		t.Fatalf("ShiftQueuedMessage = %q,%v; want first,true", m.Text, ok)
 	}
-	if text, ok := a.ShiftQueuedMessage(); !ok || text != "later" {
-		t.Fatalf("ShiftQueuedMessage = %q,%v; want later,true", text, ok)
+	if m, ok := a.ShiftQueuedMessage(); !ok || m.Text != "later" {
+		t.Fatalf("ShiftQueuedMessage = %q,%v; want later,true", m.Text, ok)
 	}
 	if _, ok := a.ShiftQueuedMessage(); ok {
 		t.Fatal("shift from empty queue reported ok")

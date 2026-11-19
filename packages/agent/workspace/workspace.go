@@ -106,6 +106,10 @@ type Workspace struct {
 	// as which member. See workspace_talkoot.go.
 	talkoot wsTalkoot
 
+	// timers is the daemon's timer service. The zero value is a host that
+	// runs none. See workspace_timers.go.
+	timers wsTimers
+
 	// raati is the deliberation board (the raati pane): at most one live
 	// deliberation, run over the workspace swarm. Zero value is an idle
 	// board. See workspace_raati.go.
@@ -594,6 +598,9 @@ func (w *Workspace) RefreshDefaults() error {
 // Close cancels in-flight turns, drains swarm sub-agents, closes open
 // session files, and releases the hook engine. Idempotent.
 func (w *Workspace) Close() error {
+	// Timers first, before the swarm and everything else a firing could
+	// reach, so that no timer fires into a daemon that is shutting down.
+	w.stopTimers()
 	// Drain swarm children BEFORE cancelling the workspace context: a
 	// graceful stop lets each child abort its turn, write its
 	// agent_stopped terminator, and flush its session — so the next
@@ -1151,10 +1158,17 @@ func (w *Workspace) attachmentExtras(sessID string, p ctrlproto.PromptParams) co
 	return extras
 }
 
-func (w *Workspace) Queue(ctx context.Context, sess, text string) error {
+func (w *Workspace) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
+	if !ctrlproto.ValidQueueSource(p.Source) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the source of a queued message is not a valid name"))
+	}
 	if s := w.live(sess); s != nil {
-		s.queue(text)
-		w.mirrorUserTyped(s.id, text)
+		s.queueFrom(p.Source, p.Text)
+		// Only what a person typed goes to the bound chat as their words. A
+		// text with a source is a report from another part of the system.
+		if p.Source == "" {
+			w.mirrorUserTyped(s.id, p.Text)
+		}
 	}
 	return nil
 }
@@ -1167,9 +1181,13 @@ func (w *Workspace) mirrorUserTyped(sessID, text string) {
 	}
 }
 
-func (w *Workspace) SetQueue(ctx context.Context, sess string, texts []string) error {
+func (w *Workspace) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
+	entries, known, err := p.Entries()
+	if err != nil {
+		return err
+	}
 	if s := w.live(sess); s != nil {
-		s.setQueue(texts)
+		s.setQueue(entries, known)
 	}
 	return nil
 }
@@ -1269,15 +1287,7 @@ func (w *Workspace) Approve(ctx context.Context, sess, callID string, d permissi
 }
 
 func (w *Workspace) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
-	if id, ok := ctrlproto.TalkootFromAddr(sess); ok {
-		if c := w.talkootCarrierOf(id); c != nil {
-			c.answer(askID, answers)
-		}
-		return nil
-	}
-	if s := w.live(sess); s != nil {
-		s.answer(askID, answers)
-	}
+	w.answerDelivered(sess, askID, answers)
 	return nil
 }
 

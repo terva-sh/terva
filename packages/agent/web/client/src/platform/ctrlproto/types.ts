@@ -62,6 +62,10 @@ export interface WireMessage {
   content: WireBlock[]
   time?: string
   synthetic?: boolean // host-injected (e.g. a continue-on-open-work nudge), not user-typed
+  // The part of terva that wrote a user-role message, such as "swarm:recap".
+  // Absent when a person typed it. Render the message as a note from terva
+  // with this as its label, and never as the person's own bubble.
+  source?: string
   // The summary a compaction checkpoint left in place of the turns it folded
   // away, and its estimate of what those turns cost. Its role is 'user' — render
   // the pair as a divider, not as a user bubble, or the transcript shows the raw
@@ -583,6 +587,9 @@ export interface Snapshot {
   permissions?: PermissionRequest[]
   asks?: AskRequest[]
   queued?: string[]
+  // The writer of each queued text, by position. '' is a person's text. The
+  // list is absent when a person typed every text.
+  queued_sources?: string[]
   skills?: SkillInfo[]
   // tail describes the swipeable takes of the last response span (turn.swipe/retry),
   // present only when there are 2+ takes. The Stage chat draws swipe arrows from it.
@@ -2333,7 +2340,33 @@ export interface ChatBridgeState {
   username?: string
   paired_id?: string
   session?: string
+  // The talkoot a bridge serves, in place of a session.
+  talkoot?: string
   error?: string
+  // What a talkoot's bridge holds back from the chat, and when it goes out.
+  outbound?: ChatOutbound
+}
+
+// ChatOutbound is what a talkoot's chat bridge holds back. The host sends a
+// message at once only for a reason, and every other message waits for the
+// brief. `more` counts held messages the full queue dropped.
+export interface ChatOutbound {
+  held?: ChatHeld[]
+  more?: number
+  quiet?: boolean
+  quiet_ends?: string // RFC 3339
+  next_brief?: string // RFC 3339
+  // No brief time is set, so the brief goes out when the person next writes.
+  brief_on_reply?: boolean
+}
+
+// ChatHeld is one held message. `reason` is finished | decision | watch, and
+// a message with none is an update that waits for the brief.
+export interface ChatHeld {
+  from?: string
+  text: string
+  at: string // RFC 3339
+  reason?: string
 }
 
 export interface ChatView {
@@ -2429,6 +2462,7 @@ export interface WireEvent {
   snapshot?: Snapshot
   info?: SessionInfo
   queued?: string[]
+  queued_sources?: string[]
   surface_id?: string
   locale?: string
   notice?: Notice
@@ -2800,6 +2834,7 @@ export type Verb =
   | 'worlds.update'
   | 'workflows.get'
   | 'workflows.list'
+  | 'timers.list'
 
 // --- talkoots, persistent agent teams (ctrlproto/talkoot.go) ---
 //
@@ -2824,6 +2859,9 @@ export interface TalkootSummary {
   color?: string
   own_color?: string
   state?: TeamState
+  // The chat bridge bound to this talkoot. The list carries it because the
+  // list is what reads again on talkoots_changed.
+  chat?: ChatBridgeState
 }
 
 export interface TalkootListResult {
@@ -2852,6 +2890,7 @@ export interface TalkootView {
   text?: string
   members: TalkootMember[]
   held?: string[]
+  chat?: ChatBridgeState
 }
 
 export interface TalkootMember {
@@ -3471,6 +3510,29 @@ export interface WorkflowRunsResult {
 
 export interface WorkflowGetParams {
   id: string
+}
+
+// --- the daemon's timers (ctrlproto/timers.go) ---
+
+// TimersResult is the payload of timers.list. `problem` says why no timer can
+// fire, such as a second daemon in the directory or a file that does not write.
+export interface TimersResult {
+  timers: TimerInfo[]
+  problem?: string
+}
+
+// TimerInfo is one timer. `schedule` is the text a person reads, such as
+// "weekdays 07:30". `next` is absent while a one-time timer's firing is in
+// flight. `problem` says why this timer waits.
+export interface TimerInfo {
+  owner: string
+  id: string
+  label?: string
+  schedule: string
+  recurs?: boolean
+  next?: string // RFC 3339
+  last_fired?: string // RFC 3339
+  problem?: string
 }
 
 // WorkflowRunResult is one completed agent call. `label` is the script's name
