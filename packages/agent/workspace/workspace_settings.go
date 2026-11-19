@@ -293,6 +293,11 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 		Description: i18n.T("Run persistent teams of agents that talk in a shared room, and serve the Talkoot app at /talkoot/. Each team's roster sets what its members may do and spend."),
 		Note:        i18n.T("applies after the daemon restarts"),
 	})
+	// Wakes mean nothing while Talkoot is off, so the row is under its parent
+	// as the nudge is under auto_swarm.
+	if cfg.TalkootEnabled != nil && *cfg.TalkootEnabled {
+		items = append(items, talkootWakesItem(cfg))
+	}
 	items = append(items, ctrlproto.SettingItem{
 		Key: "lazy_tools", Group: "context", Label: i18n.T("Lazy tool loading"), Type: "bool",
 		Value:       boolStr(cfg.LazyToolsOn()),
@@ -773,6 +778,15 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		if err := config.MutateConfig(func(c *config.Config) { c.TalkootEnabled = &on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
+	case "talkoot_wakes":
+		if err := setTalkootWakes(val); err != nil {
+			return err
+		}
+		// 🔑 A session gets talkoot_wake when its tools are built, so a member
+		// that was at work before the change needs its tools built again. The
+		// seat reads the key at each call, so this is for the tool's presence
+		// and not for the authority.
+		s.ws.rebuildAllSessions("talkoot-wakes")
 	case "language":
 		// Switch the daemon's active UI language live: swap the process-global
 		// i18n, persist as the default, and tell every tab to re-fetch its string

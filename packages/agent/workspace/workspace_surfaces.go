@@ -194,6 +194,11 @@ func (s *wsSession) surfaceList() []ctrlproto.SurfaceMeta {
 	if len(chat.Services()) > 0 {
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "chat", Title: i18n.T("Chat"), Icon: "💬", Kind: "chat", Scope: "workspace", Live: true, Actions: true})
 	}
+	// Offered only while it has something to say. Most daemons hold no timer,
+	// and a pane that is always empty teaches a person to skip it.
+	if s.ws != nil && s.ws.timersShown() {
+		metas = append(metas, ctrlproto.SurfaceMeta{ID: "timers", Title: i18n.T("Timers"), Icon: "⏰", Kind: "panel", Scope: "workspace", Live: true})
+	}
 	if s.extMgr != nil && len(s.extMgr.StatusSegments()) > 0 {
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "status", Title: i18n.T("Status"), Icon: "🔔", Kind: "panel", Scope: "session", Live: true})
 	}
@@ -283,6 +288,13 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 			return ctrlproto.Surface{}, err
 		}
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Providers"), Kind: "providers", Providers: &pv}, nil
+	case "timers":
+		// A session can exist with no workspace behind it, and a client can
+		// ask for a pane that the list did not offer.
+		if s.ws == nil {
+			return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no surface %q", id))
+		}
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Timers"), Kind: "panel", Panel: s.ws.timersPanel()}, nil
 	case "status":
 		var segs []string
 		if s.extMgr != nil {

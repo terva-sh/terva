@@ -51,6 +51,8 @@ func runMemberMode(ctx context.Context, args build.Args, version string) error {
 	}
 	defer ws.Close()
 	ws.LoadTalkoots()
+	// Timers run in a daemon for the same reason: see Workspace.LoadTimers.
+	ws.LoadTimers()
 
 	m, err := fleet.NewMember(fleet.MemberOptions{
 		HubURL:  hubURL,

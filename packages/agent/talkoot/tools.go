@@ -25,10 +25,11 @@ var SeatTools = []string{
 
 // BridgeTools are the seat tools the MCP bridge serves an external member.
 // Decision 0023 limits the bridge to team verbs: send, handoff, roster,
-// ask-human, which is ask_user_question, and propose, which its 2026-10-15
-// amendment added. The note tools need a new record first. The order is the
-// order the bridge serves them in: the native tools, then ask_user_question.
-var BridgeTools = []string{"talkoot_send", "talkoot_handoff", "talkoot_roster", "talkoot_propose", "ask_user_question"}
+// ask-human, which is ask_user_question, propose, which its 2026-10-15
+// amendment added, and wake, which its 2026-11-19 amendment added. The note
+// tools need a new record first. The order is the order the bridge serves
+// them in: the native tools, then the wake, then ask_user_question.
+var BridgeTools = []string{"talkoot_send", "talkoot_handoff", "talkoot_roster", "talkoot_propose", "talkoot_wake", "ask_user_question"}
 
 // toolPattern is a tool name, or a name prefix with a trailing *.
 var toolPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}\*?$`)

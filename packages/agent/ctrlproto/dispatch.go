@@ -178,6 +178,7 @@ var (
 	noExport       = plain("session export is not available here")
 	noArchive      = plain("session archiving is not available here")
 	noWorkflows    = plain("workflow runs are not available here")
+	noTimers       = plain("this host runs no timer service")
 	noTalkoot      = plain("talkoots are not available here")
 	// Localized rather than plain(): the TUI's /shared dialog reaches this
 	// through the in-process carrier and through `terva attach`, so a user can

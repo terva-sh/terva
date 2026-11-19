@@ -43,19 +43,11 @@ const webReloadGrace = 2 * time.Second
 // stream out to every connected client. Pending tool-approval and question
 // round-trips park here until a client answers (see workspace_confirm.go).
 type wsSession struct {
-	id string
-	ws *Workspace
-	// run is set for the session of a routine's run, and nil for every
-	// other session. The session's events tell the run what its turn costs.
-	run atomic.Pointer[routineRun]
-	// unanswered is set when a question of the turn at work had no answer
-	// at its deadline, and that ended the member's chain. The turn's next
-	// tool call stops it (workspace_talkoot_unanswered.go). A turn's start
-	// clears it.
-	unanswered atomic.Bool
-	agent      *core.Agent
-	sess       *session.Session
-	gate       *permission.ConfirmGate // nil in pure-yolo (no confirmation needed)
+	id    string
+	ws    *Workspace
+	agent *core.Agent
+	sess  *session.Session
+	gate  *permission.ConfirmGate // nil in pure-yolo (no confirmation needed)
 	// policyNotice holds the permission-policy warnings not yet shown to a
 	// client, such as a project config that could not be parsed and so lost
 	// its deny rules. Guarded by mu. See setPolicyWarnings.
@@ -609,52 +601,13 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// A talkoot member's sidebar names the tool its turn runs. Only tool and
 	// turn events reach the workspace, so a text delta costs one type switch.
 	ag.AddEventObserver(func(ev core.AgentEvent) {
-		// 🚨 A routine's run stops at its next step after its cost passed
-		// what its routine may still spend today (routineRun.step). The
-		// turn is cancelled here, on its own event path, so the cancel is
-		// in place before the step goes on: no request goes to the model
-		// after it. A tool that the model already asked for may still
-		// start, with a context that is cancelled.
-		//
-		// 🚨 The step of a request is EvTurnStart, which the loop sends
-		// before it makes the request. EvAssistantStart comes after the
-		// request is on the wire, so a stop there cut a request that the
-		// provider had already begun to count.
-		rr := s.run.Load()
-		runStep := func() {
-			if rr != nil && rr.step() {
-				s.cancelTurn()
-			}
-		}
 		switch e := ev.(type) {
 		case core.EvToolCall:
-			runStep()
-			// 🚨 A run that asked a person and got no answer was told to
-			// call no tool. One that calls a tool is stopped here.
-			if rr != nil && rr.askedAgain() {
-				s.cancelTurn()
-			}
-			// 🚨 A member's turn gets the same stop. The pause of its chain
-			// refuses a send to a teammate, and it refuses nothing that the
-			// member does on its own: a command, an edit, or the question
-			// asked again. One call passes, the word to the person, and the
-			// router lets that send go to the person alone.
-			if s.unanswered.Load() && e.Name != leftWordTool {
-				s.cancelTurn()
-			}
 			s.ws.talkootActivity(s.id, e.ID, e.Name)
 		case core.EvToolResult:
 			s.ws.talkootActivity(s.id, e.ID, "")
 		case core.EvTurnEnd, core.EvDone:
 			s.ws.talkootActivity(s.id, "", "")
-		case core.EvTurnStart, core.EvRetry:
-			// A retry is a request too. The loop sends EvRetry before it
-			// waits and tries again, and a failed request can report a cost.
-			runStep()
-		case core.EvUsage:
-			if rr != nil {
-				rr.cost(e.Cumulative.CostUSD, time.Now())
-			}
 		}
 	})
 	// A talkoot member's failed tool calls and retries become room lines.
@@ -929,31 +882,7 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 	// footprint (decision 0009). Like the chat tools, the seat is a declarative
 	// input: seating and unseating re-run this derivation.
 	if s != nil {
-		if seat, ok := w.talkootSeatOf(s.id); ok && seat.b.routine != nil {
-			// 🚨 A routine's run reads the roster and the notes, and it speaks
-			// to nobody. It gets no tool that sends, hands off, proposes or
-			// moves its workspace.
-			//
-			// It keeps ask_user_question. Nobody may be there to answer, so
-			// the question has a deadline, and the run ends at a question
-			// that nobody answered (workspace_talkoot_unanswered.go).
-			//
-			// It gets talkoot_wake only while its routine's card still
-			// allows a follow-up, and while the person's configuration turns
-			// wakes on (decision 0029 rule 11). The seat reads the policy
-			// again at each call, and the router holds the allowance.
-			var waker tools.TalkootWaker
-			if rr := seat.b.routine.run; rr.Follow < rr.FollowUps && config.TalkootWakes().On {
-				waker = seat
-			}
-			for _, t := range tools.TalkootRunTools(seat, waker) {
-				r.ToolRegistry[t.Name()] = t
-			}
-			if tc := tools.TicketCoreFor(r.ToolRegistry); tc != nil {
-				id := s.id
-				tc.Member = func() (tools.TicketMember, bool) { return w.sessionTicketMember(id) }
-			}
-		} else if ok {
+		if seat, ok := w.talkootSeatOf(s.id); ok {
 			for _, t := range tools.TalkootTools(seat) {
 				r.ToolRegistry[t.Name()] = t
 			}
@@ -969,12 +898,6 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			// keeps no timers, and says so.
 			if config.TalkootWakes().On {
 				r.ToolRegistry["talkoot_wake"] = &tools.TalkootWakeTool{Seat: seat}
-			}
-			// talkoot_routine: only while the person's configuration turns
-			// routines on, for the same reasons. The seat reads the policy
-			// again at each call.
-			if config.TalkootRoutines().On {
-				r.ToolRegistry["talkoot_routine"] = &tools.TalkootRoutineTool{Seat: seat}
 			}
 			// talkoot_workspace: only a member with workspace: either moves.
 			if _, _, err := w.movableSeat(s.id); err == nil {
@@ -1192,14 +1115,12 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		if endTalkoot != nil {
 			costBefore = s.agent.Cost().CostUSD
 		}
-		// Only a turn that one delivery started publishes its final reply to
-		// the room (talkootTurn). These counts tell such a turn from one that a
-		// person typed.
+		// 🚨 A seat alone does not make a turn Talkoot work. A person can type
+		// into a member's session directly, and that answer is private. Only a
+		// turn that a delivery started may publish its final reply to the room.
+		// A private turn that drains a delivery partway stays private.
 		openedBefore := s.reads.opened.Load()
 		usersBefore := s.reads.users.Load()
-		s.reads.turnTaken.Store(s.reads.taken.Load())
-		s.reads.turnUsers.Store(usersBefore)
-		s.unanswered.Store(false)
 		s.reads.fresh.Store(true)
 		// 🚨 A successful turn can append no assistant message. The transcript's
 		// last reply then belongs to an earlier turn, and the member's chain may
@@ -1209,8 +1130,7 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		if closing {
 			// The talkoots have closed, and no report of this member turn
 			// could reach them. The daemon is going down, so the turn does
-			// not run. The session of a routine's run gets the same answer
-			// when its run is over (talkootTurn).
+			// not run.
 			err = context.Canceled
 		} else {
 			err = gen(turnCtx)
@@ -1245,9 +1165,10 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// Publish before endTurn frees the session for another prompt or a
 		// compaction changes its transcript. Failed and cancelled generations
 		// must never expose a partial reply to the room.
-		if publishTalkoot != nil && err == nil && turnCtx.Err() == nil && s.reads.replies.Load() != repliesBefore {
-			delivered := s.reads.opened.Load() != openedBefore && s.reads.users.Load()-usersBefore == 1
-			publishTalkoot(finalTalkootText(s.agent.Messages()), delivered)
+		if publishTalkoot != nil && err == nil && turnCtx.Err() == nil &&
+			s.reads.opened.Load() != openedBefore && s.reads.users.Load()-usersBefore == 1 &&
+			s.reads.replies.Load() != repliesBefore {
+			publishTalkoot(finalTalkootText(s.agent.Messages()))
 		}
 		next, restart := s.endTurn(turnCtx, err)
 		// Snapshot-on-done: the transcript now contains the sealed final step,
@@ -1311,7 +1232,7 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			// returned no error finished, so an interrupt that came after
 			// it does not count.
 			interrupted := err != nil && errors.Is(context.Cause(turnCtx), core.ErrUserInterrupted)
-			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why, interrupted, err != nil && turnCtx.Err() != nil)
+			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why, interrupted)
 		}
 		if restart {
 			if perr := s.promptQueued(next); perr != nil {

@@ -70,6 +70,28 @@ describe('the wakes of a team', () => {
     expect(onCancel).toHaveBeenCalledWith('01C')
   })
 
+  it('says that a wake waits behind a pause, and cancels it', () => {
+    const onCancel = vi.fn()
+    render(
+      <TeamWakes
+        wakes={{
+          on: true,
+          per_member: 2,
+          max_delay: '2h',
+          open: [
+            { id: '01H', member: 'helm', reason: 'Check the deploy.', due: due.toISOString(), held: true },
+            { id: '01A', member: 'helm', reason: 'Check the CI run.', due: due.toISOString() },
+          ],
+        }}
+        onCancel={onCancel}
+      />,
+    )
+    expect(screen.getByText(/helm, came due and waits for a resume: Check the deploy\./)).toBeTruthy()
+    expect(screen.getByText(/helm: Check the CI run\./)).toBeTruthy()
+    fireEvent.click(screen.getAllByLabelText('Cancel the wake of helm')[0])
+    expect(onCancel).toHaveBeenCalledWith('01H')
+  })
+
   it('offers no cancel to a viewer that may not steer', () => {
     render(<TeamWakes wakes={{ on: true, per_member: 2, max_delay: '2h', open: [{ id: '01A', member: 'helm', reason: 'Check it.', due: due.toISOString() }] }} />)
     expect(screen.getByText(/helm: Check it\./)).toBeTruthy()

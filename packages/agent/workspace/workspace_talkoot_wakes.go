@@ -52,8 +52,12 @@ type wakeData struct {
 	Due time.Time `json:"due,omitzero"`
 	// Tries counts the firings that the room did not take.
 	Tries int `json:"tries,omitempty"`
-	// Late is how long the daemon was away at the firings before this one.
+	// Late is how long the daemon was away at the firings before this one,
+	// and how long the wake waited for a team that the daemon did not run.
 	Late time.Duration `json:"late,omitempty"`
+	// Waits is set once the wake came due while the daemon did not run its
+	// team. The list of teams counts such a wake.
+	Waits bool `json:"waits,omitempty"`
 	// Routine is set for the follow-up of a routine's run. The firing then
 	// starts a run of that routine.
 	//
@@ -97,7 +101,21 @@ func (s talkootSeat) Wake(delay time.Duration, reason string) (tools.TalkootWake
 	if s.b.revoked {
 		return tools.TalkootWakeReceipt{}, errSeatRevoked
 	}
-	return s.w.setWake(s.b, delay, reason)
+	return s.w.setWake(wakeSetter{run: s.b.run, member: s.b.member, routine: s.b.routine, gone: s.b.retired.Load, lost: errSeatRevoked}, delay, reason)
+}
+
+// wakeSetter is the seat that sets a wake: a native member's session, the
+// session of a routine's run, or a worker member's bridge call.
+type wakeSetter struct {
+	run    *talkootRun
+	member string
+	// routine is set for the session of a routine's run. Its wake is the
+	// run's follow-up.
+	routine *routineRun
+	// gone reports, inside the router call, that the seat was taken away
+	// since the caller looked it up. lost is the refusal for that.
+	gone func() bool
+	lost error
 }
 
 // setWake sets one wake for the member of b. For the seat of a routine's
@@ -106,7 +124,7 @@ func (s talkootSeat) Wake(delay time.Duration, reason string) (tools.TalkootWake
 // 🚨 The policy is read here, at each call, and not only when the tool was
 // attached. A person who turns wakes off stops the next wake at once, though
 // a session still holds the tool.
-func (w *Workspace) setWake(b *seatBinding, delay time.Duration, reason string) (tools.TalkootWakeReceipt, error) {
+func (w *Workspace) setWake(b wakeSetter, delay time.Duration, reason string) (tools.TalkootWakeReceipt, error) {
 	pol := config.TalkootWakes()
 	if !pol.On {
 		return tools.TalkootWakeReceipt{}, errWakesOff
@@ -133,10 +151,15 @@ func (w *Workspace) setWake(b *seatBinding, delay time.Duration, reason string) 
 		if o.Member != b.member {
 			continue
 		}
-		if open == 0 {
+		// A wake that waits behind a pause has no time to fire at.
+		if !o.Held && soonest.IsZero() {
 			soonest = o.Due
 		}
 		open++
+	}
+	if open >= pol.PerMember && soonest.IsZero() {
+		return tools.TalkootWakeReceipt{}, fmt.Errorf("you have %d open wake(s), and the limit is %d. The person sets that limit with talkoot_wakes.per_member. Each of your wakes came due and waits behind a pause. Ask the person to resume, or to cancel a wake",
+			open, pol.PerMember)
 	}
 	if open >= pol.PerMember {
 		return tools.TalkootWakeReceipt{}, fmt.Errorf("you have %d open wake(s), and the limit is %d. The person sets that limit with talkoot_wakes.per_member. Your next wake fires at %s. Do the check then, or ask the person to cancel a wake",
@@ -144,8 +167,8 @@ func (w *Workspace) setWake(b *seatBinding, delay time.Duration, reason string) 
 	}
 	var wk talkoot.Wake
 	err := b.run.do(func(rt *talkoot.Router) (err error) {
-		if b.retired.Load() {
-			return errSeatRevoked
+		if b.gone() {
+			return b.lost
 		}
 		if rr != nil {
 			// 🚨 The router holds the routine's allowance (rule 11).
@@ -188,41 +211,47 @@ func (w *Workspace) setWake(b *seatBinding, delay time.Duration, reason string) 
 	return out, nil
 }
 
-// openWakes lists the open wakes of the talkoot id, the soonest first. The
-// timer service holds them, and its own list is in that order.
+// openWakes lists the open wakes of the talkoot id. The wakes that came due
+// and wait behind a pause are first, in the order that they fired. The wakes
+// that a timer holds follow, the soonest first, which is the order of the
+// timer service's own list.
 //
 // 🚨 A timer alone does not make a wake open. A cancel writes the room first,
 // and the timer stays when its removal fails. The router knows that such a
 // wake is closed, so it is left out here. Without that, a cancelled wake
 // would keep its place under the member's cap until its time came.
+//
+// 🚨 A wake with no timer can be open too. A wake that fires while its member
+// is paused writes its envelope and waits, and the timer service forgets it.
+// The router holds it, so it is listed from there. Without that, the wake
+// would leave the list, a person could not cancel it, and the member's cap
+// would stop counting it (TKT-01M7PKC0).
 func (w *Workspace) openWakes(id string) []talkoot.Wake {
-	svc := w.Timers()
-	if svc == nil {
-		return nil
-	}
 	var out []talkoot.Wake
-	for _, t := range svc.List() {
-		if t.Owner != wakeTimerOwner {
-			continue
+	if svc := w.Timers(); svc != nil {
+		for _, t := range svc.List() {
+			if t.Owner != wakeTimerOwner {
+				continue
+			}
+			var d wakeData
+			if err := json.Unmarshal(t.Data, &d); err != nil || d.Talkoot != id {
+				continue
+			}
+			if d.Due.IsZero() {
+				d.Due = t.Schedule.At
+			}
+			out = append(out, talkoot.Wake{ID: t.ID, Member: d.Member, Chain: d.Chain, Reason: d.Reason, Set: d.Set, Due: d.Due, Routine: d.Routine})
 		}
-		var d wakeData
-		if err := json.Unmarshal(t.Data, &d); err != nil || d.Talkoot != id {
-			continue
-		}
-		if d.Due.IsZero() {
-			d.Due = t.Schedule.At
-		}
-		out = append(out, talkoot.Wake{ID: t.ID, Member: d.Member, Chain: d.Chain, Reason: d.Reason, Set: d.Set, Due: d.Due, Routine: d.Routine})
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	// A team that this daemon does not run has no router to ask.
 	if run, err := w.talkootRunOf(id); err == nil {
 		_ = run.do(func(rt *talkoot.Router) error {
-			out = rt.OpenWakes(out)
+			out = append(rt.HeldWakes(), rt.OpenWakes(out)...)
 			return nil
 		})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -257,8 +286,7 @@ func (w *Workspace) wakeTimerFired(svc *timers.Service, f timers.Firing) {
 	d.Late += f.Late
 	run, err := w.talkootRunOf(d.Talkoot)
 	if err != nil {
-		// No router means no room to write. The daemon's log is all that is left.
-		w.diagf("talkoot %s: the wake %s of %s came due, and this daemon does not run the team, so it was dropped: %v", d.Talkoot, f.Timer.ID, d.Member, err)
+		w.keepWake(svc, f, d, now, err)
 		return
 	}
 	wk := talkoot.Wake{ID: f.Timer.ID, Member: d.Member, Chain: d.Chain, Reason: d.Reason, Set: d.Set, Due: d.Due, Routine: d.Routine}
@@ -287,6 +315,75 @@ func (w *Workspace) wakeTimerFired(svc *timers.Service, f timers.Firing) {
 			w.diagf("talkoot %s: the wake %s of %s is in the room and was not delivered: %v", d.Talkoot, wk.ID, wk.Member, err)
 		}
 	})
+}
+
+// A wake that came due while the daemon does not run its team waits for the
+// team: its timer is set again each wakeTeamRetry. A team that did not start
+// can start only when the daemon starts, so the firing after the next start
+// finds it. The wait ends after wakeTeamWait, which is long past the use of a
+// check that a member set at most max_delay ahead.
+const (
+	wakeTeamRetry = 5 * time.Minute
+	wakeTeamWait  = 7 * 24 * time.Hour
+)
+
+// keepWake holds a wake whose team this daemon does not run. No router means
+// no room to write, so the timer is all that holds the wake, and the service
+// keeps a timer that its own handler set again.
+//
+// 🚨 Without an end, a wake of a team that never runs here again would fire
+// for ever, and no person can remove it: a cancel needs the team's run. So a
+// wake is dropped when its team is gone, and when it waited wakeTeamWait. The
+// daemon's log is all that says so, because no room is open to write.
+func (w *Workspace) keepWake(svc *timers.Service, f timers.Firing, d wakeData, now time.Time, why error) {
+	if errors.Is(why, ErrTalkootNotFound) {
+		w.diagf("talkoot %s: the wake %s of %s came due, and the team is gone, so it was dropped", d.Talkoot, f.Timer.ID, d.Member)
+		return
+	}
+	if now.Sub(d.Due) > wakeTeamWait {
+		w.diagf("talkoot %s: the wake %s of %s was dropped. It came due on %s, and this daemon did not run the team in %d days: %v",
+			d.Talkoot, f.Timer.ID, d.Member, d.Due.UTC().Format("2006-01-02"), int(wakeTeamWait/(24*time.Hour)), why)
+		return
+	}
+	first := !d.Waits
+	d.Waits = true
+	// 🔑 The wait is time that the member did not plan for, so it counts as
+	// late. The next firing adds only how late its own timer was.
+	d.Late += wakeTeamRetry
+	data, err := json.Marshal(d)
+	if err == nil {
+		_, err = svc.Set(timers.Timer{
+			Owner: wakeTimerOwner, ID: f.Timer.ID, Label: f.Timer.Label, Data: data,
+			Schedule: timers.Schedule{At: now.Add(wakeTeamRetry)},
+		})
+	}
+	switch {
+	case err != nil:
+		w.diagf("talkoot %s: the wake %s of %s is lost. This daemon does not run the team (%v), and its timer was not set again: %v", d.Talkoot, f.Timer.ID, d.Member, why, err)
+	case first:
+		// One line for the wake, and not one for each try.
+		w.diagf("talkoot %s: the wake %s of %s came due, and this daemon does not run the team, so it waits for the team: %v", d.Talkoot, f.Timer.ID, d.Member, why)
+	}
+}
+
+// wakesWaiting counts, for each team, the wakes that came due and wait for
+// the team to run.
+func (w *Workspace) wakesWaiting() map[string]int {
+	svc := w.Timers()
+	if svc == nil {
+		return nil
+	}
+	out := map[string]int{}
+	for _, t := range svc.List() {
+		if t.Owner != wakeTimerOwner {
+			continue
+		}
+		var d wakeData
+		if err := json.Unmarshal(t.Data, &d); err == nil && d.Waits {
+			out[d.Talkoot]++
+		}
+	}
+	return out
 }
 
 // A firing that the room did not take is tried again after wakeRetryAfter,
@@ -338,10 +435,6 @@ func (w *Workspace) talkootWakeCancel(_ context.Context, id, by, wake string) er
 	if err != nil {
 		return err
 	}
-	svc := w.Timers()
-	if svc == nil {
-		return errWakeNoTimers
-	}
 	var wk talkoot.Wake
 	found := false
 	for _, o := range w.openWakes(id) {
@@ -351,6 +444,15 @@ func (w *Workspace) talkootWakeCancel(_ context.Context, id, by, wake string) er
 	}
 	if !found {
 		return talkoot.ErrWakeGone
+	}
+	svc := w.Timers()
+	if wk.Held {
+		// The timer service forgot this wake when it fired, so the room's
+		// line is the whole cancel.
+		return run.do(func(rt *talkoot.Router) error { return rt.CancelWake(wk, humanBy(by)) })
+	}
+	if svc == nil {
+		return errWakeNoTimers
 	}
 	// 🔑 The room first. A cancel that the room holds stops the wake even
 	// when its timer stays, because the firing finds the wake closed. The
@@ -379,7 +481,7 @@ func (w *Workspace) talkootWakesView(id string) *ctrlproto.TalkootWakes {
 		}
 	}
 	for _, o := range open {
-		out.Open = append(out.Open, ctrlproto.TalkootWake{ID: o.ID, Member: o.Member, Chain: o.Chain, Reason: o.Reason, Set: o.Set, Due: o.Due, Routine: o.Routine})
+		out.Open = append(out.Open, ctrlproto.TalkootWake{ID: o.ID, Member: o.Member, Chain: o.Chain, Reason: o.Reason, Set: o.Set, Due: o.Due, Routine: o.Routine, Held: o.Held})
 	}
 	return out
 }

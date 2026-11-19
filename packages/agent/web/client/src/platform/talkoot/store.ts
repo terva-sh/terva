@@ -222,8 +222,10 @@ export function applyTalkootEvent(s: TalkootState, ev: WireEvent): TalkootState 
         lines: appendLines(s.lines, [t.line]),
         view: t.line.envelope?.kind === 'wake' ? closeWake(s.view, t.line.envelope.id) : s.view,
         // A run that starts or ends changes its routine's count of runs and
-        // the run at work, so the view is read again.
-        rosterGen: t.line.envelope && isRoutine(t.line.envelope.from) ? s.rosterGen + 1 : s.rosterGen,
+        // the run at work, so the view is read again. A wake that fires is
+        // read again too: a pause may hold it, and the envelope does not say
+        // so. The view then lists it as a wake that waits.
+        rosterGen: t.line.envelope && (isRoutine(t.line.envelope.from) || t.line.envelope.kind === 'wake') ? s.rosterGen + 1 : s.rosterGen,
       }
     case 'talkoot_intro':
     case 'talkoot_answer':
@@ -242,7 +244,13 @@ export function applyTalkootEvent(s: TalkootState, ev: WireEvent): TalkootState 
       return { ...s, lines: t.line ? appendLines(s.lines, [t.line]) : s.lines, rosterGen: s.rosterGen + 1 }
     case 'talkoot_status':
       if (!t.members || !s.view) return s
-      return { ...s, view: { ...s.view, members: withStatus(s.view.members, t.members) } }
+      return {
+        ...s,
+        view: { ...s.view, members: withStatus(s.view.members, t.members) },
+        // No line says that a wake left its wait. A resume changes a
+        // member's status, so the view is read again while a wake waits.
+        rosterGen: s.view.wakes?.open?.some((w) => w.held) ? s.rosterGen + 1 : s.rosterGen,
+      }
     case 'talkoot_inbox': {
       if (!t.card) return s
       const key = cardKey(t.card)

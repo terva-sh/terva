@@ -520,6 +520,10 @@ func (rt *Router) replay(l Line) {
 		if l.Action != WakeSet {
 			rt.wakesClosed[l.Ref] = true
 			delete(rt.runWakes, l.Ref)
+			// 🚨 A person may cancel a wake that fired and waits behind a
+			// pause. Its envelope is in the room before this line, so it
+			// is owed until here, and the cancel settles it.
+			rt.settleOwed(l.Ref, l.Member)
 		} else if st := rt.runs[l.Chain]; st != nil {
 			// A wake in the chain of a run at work is that run's follow-up.
 			rt.runWakeSetLocked(st, l.Ref)

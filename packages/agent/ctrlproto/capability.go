@@ -110,6 +110,8 @@ var spendingMethods = map[Method]bool{
 	// it reaches the provider exactly as turn.retry does.
 	MethodTurnResume: true,
 	MethodPrompt:     true, MethodQueue: true, MethodCompact: true,
+	// queue.send starts a turn on an entry that waited, as a prompt does.
+	MethodQueueSend: true,
 	MethodTurnSwipe: true, MethodTurnRetry: true, MethodTurnContinue: true,
 	MethodApprove: true, MethodAnswer: true,
 	MethodPostLine: true, MethodDirectTurn: true, MethodTurnAdvance: true,

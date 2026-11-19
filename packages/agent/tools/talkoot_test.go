@@ -146,13 +146,16 @@ func TestTalkootToolsRefuseWithoutASeat(t *testing.T) {
 }
 
 // The bridge serves TalkootToolDefs, so the definitions must be exactly what
-// the native tools advertise, and each schema must parse.
+// the native tools advertise, and each schema must parse. The seat has six
+// tools, and the wake follows them: decision 0023 put it on the bridge on
+// 2026-11-19, and a native session has it only while wakes are on.
 func TestTalkootToolDefsMatchTheNativeTools(t *testing.T) {
 	defs := TalkootToolDefs()
-	tools := TalkootTools(nil)
-	if len(defs) != 6 || len(tools) != 6 {
-		t.Fatalf("want six tools, got %d defs and %d tools", len(defs), len(tools))
+	seat := TalkootTools(nil)
+	if len(defs) != 7 || len(seat) != 6 {
+		t.Fatalf("want the six seat tools and the wake, got %d defs and %d seat tools", len(defs), len(seat))
 	}
+	tools := append(seat, &TalkootWakeTool{})
 	for i, d := range defs {
 		tool := tools[i]
 		if d.Name != tool.Name() || d.Description != tool.Description() || string(d.Schema) != string(tool.Schema()) {

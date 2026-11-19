@@ -80,6 +80,7 @@
   "%s waits for you": "%s waits for you",
   "%s written": "%s written",
   "%s, a follow-up of its routine: %s": "%s, a follow-up of its routine: %s",
+  "%s, came due and waits for a resume: %s": "%s, came due and waits for a resume: %s",
   "%s: backend default": "%s: backend default",
   "%s: model": "%s: model",
   "%s: requested model %s": "%s: requested model %s",

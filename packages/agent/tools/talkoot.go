@@ -93,7 +93,10 @@ const (
 // surface that serves them without a seat, such as the MCP bridge.
 func TalkootToolDefs() []TalkootToolDef {
 	var out []TalkootToolDef
-	for _, t := range TalkootTools(nil) {
+	// The wake is no seat tool: a native session has it only while the
+	// person's configuration turns wakes on. The bridge serves it since
+	// the 2026-11-19 amendment of decision 0023, so its text is here too.
+	for _, t := range append(TalkootTools(nil), &TalkootWakeTool{}) {
 		out = append(out, TalkootToolDef{Name: t.Name(), Description: t.Description(), Schema: t.Schema()})
 	}
 	return out

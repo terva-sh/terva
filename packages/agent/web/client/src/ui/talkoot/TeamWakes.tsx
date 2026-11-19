@@ -10,6 +10,9 @@ import { dayTime } from './RoomLine'
 //
 // The follow-up of a routine's run is in the same list. It starts one more
 // run of the routine and no turn of the member, so its line says so.
+//
+// A wake that came due behind a pause is in the list too, with the time that
+// it fired. It waits for a resume, and a person can still cancel it.
 export function TeamWakes({ wakes, onCancel }: { wakes?: TalkootWakes; onCancel?: (wake: string) => void }) {
   if (!wakes) return null
   const open = wakes.open ?? []
@@ -27,7 +30,11 @@ export function TeamWakes({ wakes, onCancel }: { wakes?: TalkootWakes; onCancel?
           {open.map((w) => (
             <li key={w.id}>
               <span class="talkoot-held-why">{dayTime(w.due)}</span>{' '}
-              {w.routine ? t('%s, a follow-up of its routine: %s', w.member, w.reason) : `${w.member}: ${w.reason}`}
+              {w.held
+                ? t('%s, came due and waits for a resume: %s', w.member, w.reason)
+                : w.routine
+                  ? t('%s, a follow-up of its routine: %s', w.member, w.reason)
+                  : `${w.member}: ${w.reason}`}
               {onCancel && (
                 <button class="btn sm ghost" title={t('Cancel this wake')} aria-label={t('Cancel the wake of %s', w.member)} onClick={() => onCancel(w.id)}>
                   ✕

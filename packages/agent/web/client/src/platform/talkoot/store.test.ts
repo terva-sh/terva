@@ -300,6 +300,30 @@ describe('the wakes in the talkoot store', () => {
     expect(s.view!.wakes!.open!.map((w) => w.id)).toEqual(['w4'])
   })
 
+  it('reads the view again for a wake that fires, and while a wake waits behind a pause', () => {
+    let s = setView(emptyTalkoot('crew'), on(), 0)
+    s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: wakeLine('set', 'w1', 'helm', '2026-11-17T11:00:00Z', '2026-11-17T10:00:01Z') }))
+    expect(rosterStale(s)).toBe(false)
+    // The envelope does not say whether a pause holds it, so the view says.
+    s = applyTalkootEvent(s, ev('talkoot_envelope', { id: 'crew', line: fired('w1', 'helm', '2026-11-17T11:00:01Z') }))
+    expect(rosterStale(s)).toBe(true)
+    const held: TalkootView = { ...on(), wakes: { on: true, per_member: 2, max_delay: '2h', open: [{ id: 'w1', member: 'helm', reason: 'Check w1.', due: '2026-11-17T11:00:01Z', held: true }] } }
+    s = setView(s, held)
+    expect(rosterStale(s)).toBe(false)
+    expect(s.view!.wakes!.open![0]).toMatchObject({ id: 'w1', held: true })
+    // No line says that the wake left its wait. A change of status does.
+    s = applyTalkootEvent(s, ev('talkoot_status', { id: 'crew', members: [] }))
+    expect(rosterStale(s)).toBe(true)
+    // With no wake that waits, a status reads nothing again.
+    let plain = setView(emptyTalkoot('crew'), on(), 0)
+    plain = applyTalkootEvent(plain, ev('talkoot_status', { id: 'crew', members: [] }))
+    expect(rosterStale(plain)).toBe(false)
+    // A person's cancel closes the wake that waits.
+    s = setView(s, held)
+    s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: { ...wakeLine('cancelled', 'w1', 'helm', '2026-11-17T11:00:00Z', '2026-11-17T11:30:00Z'), by: 'human:sothr' } }))
+    expect(s.view!.wakes!.open).toHaveLength(0)
+  })
+
   it('reads the view again after a routine line, which carries no next time', () => {
     let s = setView(emptyTalkoot('crew'), on(), 0)
     expect(rosterStale(s)).toBe(false)

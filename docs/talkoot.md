@@ -359,8 +359,11 @@ member that ends its turn never looks again. A **wake** is the third way.
 The member sets one later turn for itself with the `talkoot_wake` tool and
 ends its turn. The daemon starts the later turn when the time comes.
 
-Wakes are off by default. Turn them on in your user configuration,
-`$TERVA_HOME/config.json`:
+Wakes are off by default. Turn them on with **Member wakes** in the
+settings, which is under **Talkoot teams** while that row is on. The row
+sets how many wakes one member may have open at a time. It writes the key to
+your user configuration, `$TERVA_HOME/config.json`, and you can also set the
+key there by hand:
 
 ```json
 {
@@ -388,12 +391,17 @@ on this page. A number in quotes, as in `"per_member": "3"`, is one. The
 whole `config.json` then does not read. terva says so on standard error and
 starts with its defaults, so Talkoot itself is off.
 
-Restart the daemon after you turn wakes on. A member gets the tool when its
-session is built, so a running session does not gain it. A daemon that keeps
-no timers, such as one whose timer file does not open, still gives the tool,
-and the tool then refuses with that reason. Turning wakes off
-needs no restart. The daemon reads the key again each time a member sets a
-wake and each time a wake fires.
+The **Member wakes** row needs no restart. A member has the tool at its next
+turn. The row offers the caps 1, 2, 3 and 5, and it keeps the `max_delay`
+that the key holds. **Off** removes the key, and `max_delay` goes with it.
+
+Restart the daemon after you turn wakes on by hand in `config.json`. A member
+gets the tool when its session is built, so a running session does not gain
+it from an edit of the file. A daemon that keeps no timers, such as one
+whose timer file does not open, still gives the tool, and the tool then
+refuses with that reason. Turning wakes off needs no restart in either way.
+The daemon reads the key again each time a member sets a wake and each time
+a wake fires.
 
 ### What a wake is
 
@@ -428,6 +436,35 @@ when the list names it. A member in `plan` posture keeps it. To approve each
 wake yourself, write an `ask` rule for `talkoot_wake`
 ([permissions.md](permissions.md)).
 
+### A wake of a worker member
+
+A member on the `claude` or the `terva:portable` driver sets a wake with the
+same tool, through the Talkoot MCP bridge. The two caps bound it, it needs a
+chain that you began, and the room and the rail show it as they show a native
+member's.
+
+Three things differ:
+
+- **The woken turn is outside terva's permission gate.** A native member's
+  turn runs under its posture and your rules. A worker's turn runs in its own
+  harness, under that harness's rules, with nobody present. The daemon checks
+  the call that sets the wake, and it does not check what the worker does
+  when the wake fires. To keep one worker from a wake, give its member a
+  `tools` list that does not name `talkoot_wake`. A member with no list has
+  the wake, as a native member does. To keep every member from it, write a
+  `deny` rule for `talkoot_wake`. The daemon applies your rules to a
+  worker's call by the tool's own name.
+- **The wake starts a worker that stopped.** A worker stops when it is idle.
+  The wake is a delivery, so it starts the worker again, as a message does.
+- **The turn cap bounds it.** Each woken turn counts toward the member's
+  `turns_per_day`. Some worker turns report no cost, and then that cap is
+  the one limit on a wake that fires each hour. A wake that comes due at the
+  cap waits in the room.
+
+The worker has the tool in its list whether wakes are on or off, because the
+bridge reads no configuration. While wakes are off, the daemon refuses the
+call and names the key.
+
 ### See a wake, and cancel it
 
 The foot of the rail in the Talkoot app says that wakes are on,
@@ -435,11 +472,14 @@ with the two caps. It lists each open wake with its time, its member and its
 reason. The cancel button beside a wake removes it, and the member gets no
 turn from it.
 
-A wake is open until it comes due. A wake that comes due while its member or
-its chain is paused becomes a message in the room that waits for your resume,
-as a teammate's message does. It then leaves the list of open wakes and the
-member's cap, and the cancel button no longer reaches it. To keep that turn
-from the member, leave the chain paused.
+A wake is open until it reaches its member. A wake that comes due while its
+member or its chain is paused becomes a message in the room that waits for
+your resume, as a teammate's message does. It stays in the list of open
+wakes, with the time that it came due and the words "came due and waits for
+a resume". It still counts toward the member's cap, and the cancel button
+still reaches it. A wake that you cancel there gives the member no turn at
+the resume, and its message stays in the room with the line of your cancel
+after it.
 
 The room records each step. A line says when a member set a wake, when you
 cancelled one, and when one came due and did not fire, with the cause. A
@@ -453,7 +493,7 @@ wake that fires shows as a message that the member sent to itself, marked
 | The daemon was down at the wake's time | The wake fires when the daemon starts, and its text says how late it is |
 | You turned wakes off | An open wake does not fire. The room records it as dropped |
 | The member left the roster | The wake is dropped, and the room says so |
-| The member or its chain is paused | The wake comes due and waits in the room as a message. The member reads it when you resume |
+| The member or its chain is paused | The wake comes due and waits in the room as a message. The member reads it when you resume. Until then the rail lists it as a wake that came due and waits, it counts toward the member's cap, and you can cancel it there. A wake that you cancel gives the member no turn at the resume |
 | The chain has no hop left | The chain pauses, as it does for a message past the limit. A wake that comes due waits for your resume, and a new wake is refused |
 | A roster update runs at the wake's time | The daemon tries the wake again each half minute, for up to ten minutes. The wake's text does not call that wait late. After the last try the wake is dropped, and the room says so |
 | `talkoot_enabled` is off | Open wakes wait in the **Timers** pane with the reason, and none fires |
@@ -1054,8 +1094,10 @@ on, it also has `talkoot_wake`
 
 A `claude` or `terva:portable` member reaches the team through the Talkoot
 MCP bridge, which gives it `talkoot_send`, `talkoot_handoff`,
-`talkoot_roster`, `talkoot_propose`, and `ask_user_question`. Its proposal
-waits in the inbox under the member's name, as a native member's does. Each
+`talkoot_roster`, `talkoot_propose`, `talkoot_wake`, and `ask_user_question`.
+Its proposal waits in the inbox under the member's name, as a native
+member's does. Its wake is under the same two caps as a native member's
+([A wake of a worker member](#a-wake-of-a-worker-member)). Each
 call takes the same path as a
 native member's: your hooks, then the policy of the member's posture with
 your rules, and a card in the inbox when the policy asks.
@@ -1066,7 +1108,9 @@ your rules, and a card in the inbox when the policy asks.
   a Claude Code permission mode that is never wider: `plan` to plan mode,
   `auto-edit` to accept-edits mode, and `ask` or `workspace` to the default
   mode, with its questions sent to your inbox. Its `tools` can narrow only to
-  `read`, `write`, `edit`, `bash`, `grep`, and `glob`.
+  `read`, `write`, `edit`, `bash`, `grep`, and `glob`. The list may also
+  name `talkoot_wake`. A member with a list that does not name it sets no
+  wake.
 - A `terva:portable` member receives the same briefing a Claude Code member
   does, and nothing of terva's own context. It cannot narrow its tools, so a
   roster that sets `tools` for it does not load.
@@ -1293,8 +1337,6 @@ capability it needs, and the events a talkoot sends.
 - There is no driver for Codex or for other ACP agents.
 - The guard values and the daily budget period are fixed.
 - A member on another machine cannot join a team.
-- A worker member cannot set a wake. Only a `native` member has
-  `talkoot_wake`.
 - A watcher routine does not run. The daemon stores it and keeps its
   schedule.
 - A routine's review limit counts only the commands that `review_commands`

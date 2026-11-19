@@ -254,11 +254,13 @@ func TestClaudeCommandWiresTheTalkootBridge(t *testing.T) {
 	if n := strings.Count(strings.Join(cmd.Args, " "), "--strict-mcp-config"); n != 1 {
 		t.Errorf("--strict-mcp-config appears %d times, want once: %v", n, cmd.Args)
 	}
-	// 🔑 The daemon gates each seat-tool call with the member's policy, so
-	// claude pre-approves all five, in every posture, and asks nobody.
+	// 🔑 The daemon gates each bridge call with the member's policy, so
+	// claude pre-approves all six, in every posture, and asks nobody. The
+	// wake is among them since decision 0023's amendment of 2026-11-19, and
+	// the daemon refuses it while the person's wakes are off.
 	allowed, _ := flagArg(cmd.Args, "--allowedTools")
-	if allowed != "mcp__terva_talkoot__talkoot_send,mcp__terva_talkoot__talkoot_handoff,mcp__terva_talkoot__talkoot_roster,mcp__terva_talkoot__talkoot_propose,mcp__terva_talkoot__ask_user_question" {
-		t.Errorf("--allowedTools %q, want the five seat tools", allowed)
+	if allowed != "mcp__terva_talkoot__talkoot_send,mcp__terva_talkoot__talkoot_handoff,mcp__terva_talkoot__talkoot_roster,mcp__terva_talkoot__talkoot_propose,mcp__terva_talkoot__talkoot_wake,mcp__terva_talkoot__ask_user_question" {
+		t.Errorf("--allowedTools %q, want the six tools of the bridge", allowed)
 	}
 	// The bridge's question tool is the member's only one, so its answer
 	// reaches the room.

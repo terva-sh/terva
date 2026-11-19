@@ -60,10 +60,6 @@ const (
 	// LineWake records a follow-up that a member set for itself: when it was
 	// set, cancelled or dropped (wake.go). The firing is an envelope.
 	LineWake = "wake"
-	// LineRoutine records one step of a routine: a person approved, paused,
-	// resumed or deleted it (routine.go). Ref is the routine's id, and an
-	// approved line holds the whole routine in Routine. The router ignores it.
-	LineRoutine = "routine"
 	// LineDamaged is never written. Read returns it in place of a line that
 	// does not parse.
 	LineDamaged = "damaged"
@@ -137,9 +133,6 @@ type Line struct {
 	Reviewer bool `json:"reviewer,omitempty"`
 	// Due is set on a wake line: the time the wake fires.
 	Due time.Time `json:"due,omitzero"`
-	// Routine is set on an approved routine line: the routine with every
-	// limit's value at the approval.
-	Routine *Routine `json:"routine,omitempty"`
 	// Kid names the key that sealed the line, and MAC is the seal. MAC must
 	// stay the last field: the seal covers every byte before it (seal.go).
 	Kid string `json:"kid,omitempty"`

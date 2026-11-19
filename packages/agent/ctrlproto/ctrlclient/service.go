@@ -40,6 +40,10 @@ func (s *Service) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSe
 	return s.c.Call(ctx, sess, ctrlproto.MethodQueueSet, p, nil)
 }
 
+func (s *Service) SendQueued(ctx context.Context, sess string, p ctrlproto.QueueSendParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodQueueSend, p, nil)
+}
+
 func (s *Service) Cancel(ctx context.Context, sess string) error {
 	return s.c.Call(ctx, sess, ctrlproto.MethodCancel, nil, nil)
 }

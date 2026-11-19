@@ -2374,6 +2374,8 @@ export interface ChatView {
   bridge: ChatBridgeState
   // A `terva bot` daemon already polling this service; connect is refused.
   daemon_pid?: number
+  // Why a talkoot_chat key that is set starts no bridge.
+  problem?: string
 }
 
 // WireStall / WireEscalation are the payloads of the stuck-loop hatch's live
@@ -2731,6 +2733,7 @@ export type Verb =
   | 'post.line'
   | 'prompt'
   | 'queue'
+  | 'queue.send'
   | 'queue.set'
   | 'replay.control'
   | 'replay.state'
@@ -2912,6 +2915,10 @@ export interface TalkootRoutines {
   on: boolean
   max?: number
   problem?: string
+  // Whether the talkoot_routines key names the commands that ask for a
+  // review. Without them nothing counts a review request, and the
+  // reviews_per_day of a routine binds nothing.
+  reviews_counted?: boolean
   routines?: TalkootRoutine[]
 }
 
@@ -2949,6 +2956,9 @@ export interface TalkootRoutine {
   runs?: number
   // What the routine's runs spent today, against fields.spend_usd_per_day.
   spent_today_usd?: number
+  // The reviews that the routine's chains asked for today, against
+  // fields.reviews_per_day.
+  reviews_today?: number
   // The session of the run that is at work now.
   run_session?: string
   next?: string
@@ -2974,6 +2984,9 @@ export interface TalkootRoutineAsk {
   // Names what this card shows. An approval sends it back. Absent while
   // `defaults_unknown` is set.
   digest?: string
+  // Whether the talkoot_routines key names the commands that ask for a
+  // review, as on TalkootRoutines.
+  reviews_counted?: boolean
 }
 
 export interface TalkootRoutineDiff {
@@ -3018,6 +3031,10 @@ export interface TalkootWake {
   // Set for the follow-up of a routine's run: it starts one more run of
   // that routine, and gives the member no turn.
   routine?: string
+  // Set for a wake that came due while a pause or a limit held its member.
+  // It waits in the room, `due` is the time that it fired, and a person can
+  // still cancel it.
+  held?: boolean
 }
 
 export interface TalkootMember {
@@ -3427,6 +3444,9 @@ export interface TalkootLine {
   // approval. A routine line's `action` is approved, paused, resumed, or
   // deleted, and its `ref` is the routine's id.
   routine?: TalkootRoutine
+  // On a review line: the review requests of one tool call in a chain that
+  // a routine began. `member` made the call, and `ref` names the routine.
+  count?: number
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.

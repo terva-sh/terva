@@ -70,6 +70,7 @@ personas.list	control
 post.line	conversation
 prompt	conversation
 queue	conversation
+queue.send	conversation
 queue.set	conversation
 replay.control	replay
 replay.state	replay

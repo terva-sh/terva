@@ -542,7 +542,7 @@ func renderRun(r Roster, e Envelope, routine Routine, s RunStart, follow int) st
 	}
 	switch {
 	case s.Wake != nil && late >= time.Minute:
-		fmt.Fprintf(&b, "This follow-up is %s late, because the daemon was not at work at its time.\n", lateText(late))
+		fmt.Fprintf(&b, "This follow-up is %s late, because the daemon did not run the team at its time.\n", lateText(late))
 	case s.Wake != nil:
 	case missed > 0:
 		fmt.Fprintf(&b, "This run is late. The daemon was not at work, and it missed %d earlier time(s) of this routine. This one run stands for all of them, and the last time was %s ago.\n",

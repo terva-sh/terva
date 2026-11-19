@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core/permission"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
 )
 
@@ -70,6 +71,8 @@ func (w *Workspace) talkootList(ctx context.Context) ([]talkootSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	// ⚠️ Before the lock. The timers have a mutex of their own.
+	waiting := w.wakesWaiting()
 	w.talkoot.mu.Lock()
 	defer w.talkoot.mu.Unlock()
 	out := make([]talkootSummary, 0, len(ids))
@@ -84,6 +87,11 @@ func (w *Workspace) talkootList(ctx context.Context) ([]talkootSummary, error) {
 			sum.Home, sum.Name, sum.Title, sum.Color, sum.OwnColor = r.Home, r.Name, r.Title, look.TeamColor(id, r.Color), r.Color
 		} else if sum.Problem == "" {
 			sum.Problem = err.Error()
+		}
+		// A wake that came due waits for a team that did not start, and the
+		// person who reads the problem learns that it is not lost.
+		if n := waiting[id]; n > 0 && !sum.Running && sum.Problem != "" {
+			sum.Problem += ". " + i18n.T("%d wake(s) came due, and wait until the team runs", n)
 		}
 		out = append(out, sum)
 	}

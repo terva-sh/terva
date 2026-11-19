@@ -78,13 +78,30 @@ func (w *Workspace) talkootWorkerCall(ctx context.Context, id, agentID, tool str
 	if tool == "ask_user_question" {
 		t = &tools.AskUserTool{Asker: &workerAsker{seat: seat}}
 	}
-	for _, c := range tools.TalkootTools(seat) {
+	// The wake is no seat tool, so it is not among TalkootTools. The seat
+	// reads the person's talkoot_wakes key at the call, and refuses while
+	// wakes are off (decision 0023, amended 2026-11-19).
+	for _, c := range append(tools.TalkootTools(seat), &tools.TalkootWakeTool{Seat: seat}) {
 		if c.Name() == tool {
 			t = c
 		}
 	}
 	if t == nil {
 		return "", false, fmt.Errorf("no talkoot tool is named %q", tool)
+	}
+	// 🚨 The wake is no seat tool, so the member's roster tools list narrows
+	// it, as narrowMemberTools does for a native member. A native session
+	// loses the tool at its build. A worker has no registry here, so the
+	// list is asked at each call. A member that the roster no longer holds
+	// has the seat tools alone.
+	if !slices.Contains(talkoot.SeatTools, tool) {
+		m, ok := memberOf(*run.roster.Load(), member)
+		if !ok {
+			return "", false, errWorkerUnseated
+		}
+		if m.Tools != nil && !talkoot.MatchTool(m.Tools, tool, core.ToolGroup(t)) {
+			return "", false, fmt.Errorf("the roster's tools list for %s does not name %s. A person adds it to the list", member, tool)
+		}
 	}
 	gate, err := w.workerGate(id, run, member, agentID)
 	if err != nil {
@@ -241,6 +258,18 @@ func (s workerSeat) Propose(ops []talkoot.Op, undo, why string) (talkoot.Proposa
 		}
 		return nil
 	})
+}
+
+// Wake sets one wake for the worker's member (decision 0023, amended
+// 2026-11-19). It takes the caps and the tests of a native member's wake.
+// The firing is a delivery to the member, so it starts a worker that stopped
+// for idleness, and its turn counts against the member's turn cap.
+//
+// 🚨 The woken turn runs in the worker's own harness, outside terva's
+// permission gate, with nobody present. The record says that the maintainer
+// accepted that cost. The gate on this call is the one control here.
+func (s workerSeat) Wake(delay time.Duration, reason string) (tools.TalkootWakeReceipt, error) {
+	return s.w.setWake(wakeSetter{run: s.run, member: s.member, gone: func() bool { return !s.holds() }, lost: errWorkerUnseated}, delay, reason)
 }
 
 // workerQuestionWait is mcpbridge.TeamQuestionWait. A test shortens it.

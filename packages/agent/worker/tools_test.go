@@ -85,6 +85,27 @@ func TestClaudeCommandNarrowsToTheToolsList(t *testing.T) {
 	}
 }
 
+// The bridge serves talkoot_wake, and the wake is no seat tool, so the daemon
+// refuses the wake of a member whose tools list does not name it. A list must
+// therefore be able to name it. It maps to nothing on Claude's side, as a
+// seat tool does, because it reaches Claude through the bridge.
+func TestAClaudeToolsListMayNameTheWake(t *testing.T) {
+	got, err := claudeTools([]string{"read", "talkoot_wake", "talkoot_send"})
+	if err != nil || len(got) != 1 || got[0] != "Read" {
+		t.Fatalf("claudeTools = %q, %v, want Read alone", got, err)
+	}
+	// With no built-in tool left, the value is the empty one that disables
+	// them all.
+	if got, err := claudeTools([]string{"talkoot_wake"}); err != nil || len(got) != 1 || got[0] != "" {
+		t.Fatalf("claudeTools = %q, %v, want the empty value", got, err)
+	}
+	// The positive control: a name that is no seat tool, and that neither
+	// Claude nor the bridge has, is still refused.
+	if _, err := claudeTools([]string{"read", "talkoot_routine"}); err == nil {
+		t.Error("a tool that the bridge does not serve passed as a name")
+	}
+}
+
 // A roster reads each backend's Tools to decide whether a list can reach it.
 // The terva backends have none yet, because terva's --tools narrows the
 // built-in tools only.

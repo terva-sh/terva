@@ -258,11 +258,8 @@ start by itself. A team's chat bridge sets one timer for its brief and one
 for the end of quiet hours
 ([talkoot.md](talkoot.md#when-the-team-writes-to-you)). A team member sets a
 one-time timer for each wake, which is one later turn for itself
-([talkoot.md](talkoot.md#let-a-member-check-back-later)). A routine that you
-approved holds one recurring timer
-([talkoot.md](talkoot.md#approve-work-on-a-schedule)), and each of its times
-starts a run in a session of its own. Decision record 0029, "Unattended wakes",
-describes the plan the three belong to.
+([talkoot.md](talkoot.md#let-a-member-check-back-later)). Decision record
+0029, "Unattended wakes", describes the plan the two belong to.
 
 Use the recipe on this page for a job of your own. A system timer starts a
 fresh process with nothing left over from the last run. A daemon timer fires

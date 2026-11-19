@@ -546,6 +546,10 @@ type TalkootWake struct {
 	// one more run of that routine, and gives the member's own session no
 	// turn.
 	Routine string `json:"routine,omitempty"`
+	// Held is set for a wake that came due while a pause or a limit held
+	// its member. Its envelope waits in the room, Due is the time that it
+	// fired, and a person can still cancel it.
+	Held bool `json:"held,omitempty"`
 }
 
 // The actions of talkoot.routine_set.
@@ -577,6 +581,10 @@ type TalkootRoutines struct {
 	// Problem says why the talkoot_routines key is set and routines are
 	// still off.
 	Problem string `json:"problem,omitempty"`
+	// ReviewsCounted says that the talkoot_routines key names the commands
+	// that ask for a review. Without them nothing counts a review request,
+	// and the reviews_per_day of a routine binds nothing.
+	ReviewsCounted bool `json:"reviews_counted,omitempty"`
 	// Routines lists every routine, the paused ones included, oldest first.
 	Routines []TalkootRoutine `json:"routines,omitempty"`
 }
@@ -622,6 +630,9 @@ type TalkootRoutine struct {
 	// SpentTodayUSD is what the routine's runs spent today. Fields holds the
 	// daily limit that it counts against.
 	SpentTodayUSD float64 `json:"spent_today_usd,omitempty"`
+	// ReviewsToday counts the reviews that the routine's chains asked for
+	// today. Fields holds the daily limit that it counts against.
+	ReviewsToday int `json:"reviews_today,omitempty"`
 	// RunSession is the session of the run that is at work now, or empty.
 	RunSession string `json:"run_session,omitempty"`
 	// Next is the routine's next time, and it is unset for a paused routine.
@@ -653,6 +664,10 @@ type TalkootRoutineAsk struct {
 	// daemon refuses one whose card changed after it was read. It is absent
 	// while DefaultsUnknown is set.
 	Digest string `json:"digest,omitempty"`
+	// ReviewsCounted says that the talkoot_routines key names the commands
+	// that ask for a review, as on TalkootRoutines. The card says which of
+	// its limits the daemon keeps.
+	ReviewsCounted bool `json:"reviews_counted,omitempty"`
 }
 
 // TalkootRoutineDiff is one limit of an ask, beside the default of its kind.
@@ -769,6 +784,10 @@ type TalkootLine struct {
 	// limit's value at the approval. A routine line's Action is approved,
 	// paused, resumed, or deleted, and its Ref is the routine's id.
 	Routine *TalkootRoutine `json:"routine,omitempty"`
+	// Count is set on a review line: the review requests of one tool call
+	// in a chain that a routine began. Member made the call, Chain is the
+	// root of its chain, and Ref names the routine.
+	Count int `json:"count,omitempty"`
 }
 
 // TalkootNotesResult is the talkoot.notes reply, newest note first.

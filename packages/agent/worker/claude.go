@@ -223,15 +223,17 @@ func claudeSeatTools() []string {
 
 // claudeTools maps a tools allowlist onto Claude Code's --tools names. A seat
 // tool reaches Claude through the Talkoot MCP bridge, not --tools, so it maps
-// to nothing. Any other name, a pattern included, is refused: Claude has no
-// tool terva can name for it.
+// to nothing. So does talkoot_wake, which the bridge serves and which is no
+// seat tool: a list must be able to name it, because the daemon refuses the
+// wake of a member whose list does not (talkootWorkerCall). Any other name,
+// a pattern included, is refused: Claude has no tool terva can name for it.
 //
 // ⚠️ With a list, --strict-mcp-config loads only the servers in --mcp-config,
 // so the Talkoot bridge joins that config on both paths (claudeCommand).
 func claudeTools(names []string) ([]string, error) {
 	var out []string
 	for _, n := range names {
-		if slices.Contains(talkoot.SeatTools, n) {
+		if slices.Contains(talkoot.SeatTools, n) || slices.Contains(talkoot.BridgeTools, n) {
 			continue
 		}
 		c, ok := claudeToolNames[n]

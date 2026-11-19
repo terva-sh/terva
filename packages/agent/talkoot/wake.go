@@ -3,6 +3,7 @@ package talkoot
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -64,6 +65,10 @@ type Wake struct {
 	// routine, and Follow is that run's number (run.go).
 	Routine string
 	Follow  int
+	// Held is set for a wake that came due and whose envelope waits in the
+	// room, because a pause or a limit holds its delivery. Due is then the
+	// time that the wake fired.
+	Held bool
 }
 
 // wakeReason makes a wake's reason one line and checks its size.
@@ -206,20 +211,59 @@ func (rt *Router) runWakeSetLocked(st *runState, id string) {
 // CancelWake records that the person by cancelled a wake. The host calls it
 // before it cancels the timer. A firing that the timer starts after this
 // finds the wake closed, and sends nothing.
+//
+// A wake that fired is closed, with one exception: its envelope still waits
+// behind a pause or a limit. The cancel then takes the envelope out of the
+// held deliveries, so a resume gives the member no turn from it. A wake that
+// reached its member is gone.
 func (rt *Router) CancelWake(w Wake, by string) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if rt.wakesClosed[w.ID] {
+	held := rt.heldWakeLocked(w.ID)
+	if rt.wakesClosed[w.ID] && held < 0 {
 		return ErrWakeGone
 	}
 	l := w.line(WakeCancelled, rt.now())
 	l.By = by
+	// 🔑 The room first. A cancel that the room does not hold must leave the
+	// envelope held, or a restart would deliver what the person cancelled.
 	if err := rt.room.Append(l); err != nil {
 		return err
+	}
+	if held >= 0 {
+		rt.held = slices.Delete(rt.held, held, held+1)
 	}
 	rt.wakesClosed[w.ID] = true
 	delete(rt.runWakes, w.ID)
 	return nil
+}
+
+// heldWakeLocked returns the index in held of the wake id's envelope, or -1.
+// A wake that fired while a pause or a limit held its member waits there.
+func (rt *Router) heldWakeLocked(id string) int {
+	return slices.IndexFunc(rt.held, func(p pending) bool {
+		return p.to != "" && p.env.Kind == KindWake && p.env.ID == id
+	})
+}
+
+// HeldWakes returns the wakes that came due and wait for their member, in
+// the order that they fired. The host's timers no longer hold such a wake,
+// so the host lists it from here: a person must see it, cancel it, and have
+// it count toward the member's cap (TKT-01M7PKC0).
+func (rt *Router) HeldWakes() []Wake {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	var out []Wake
+	for _, p := range rt.held {
+		if p.to == "" || p.env.Kind != KindWake {
+			continue
+		}
+		// The first line is the member's reason. A late wake has a second
+		// line, which the router wrote.
+		reason, _, _ := strings.Cut(p.env.Body, "\n")
+		out = append(out, Wake{ID: p.env.ID, Member: p.to, Chain: p.env.Chain.Root, Reason: reason, Due: p.env.At, Held: true})
+	}
+	return out
 }
 
 // OpenWakes returns the wakes of ws that the room has not closed, in the
@@ -295,9 +339,10 @@ func (rt *Router) FireWake(w Wake, late time.Duration) (deliver func(), err erro
 	// second line into the body, where the late notice goes.
 	body := strings.Join(strings.Fields(w.Reason), " ")
 	// A late wake says so. The member planned for a time, and what it meant
-	// to check may have changed while the daemon was away.
+	// to check may have changed since. The daemon was down at that time, or
+	// it was up and did not run the team.
 	if late >= time.Minute {
-		body += "\n" + lateNotice + lateText(late) + " late, because the daemon was not at work at the time you set."
+		body += "\n" + lateNotice + lateText(late) + " late, because the daemon did not run the team at the time you set."
 	}
 	// One hop, and no count against the send rate. A chain past its hop
 	// limit pauses, and the envelope then waits for a person's resume.

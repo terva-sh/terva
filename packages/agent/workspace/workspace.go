@@ -106,6 +106,10 @@ type Workspace struct {
 	// as which member. See workspace_talkoot.go.
 	talkoot wsTalkoot
 
+	// timers is the daemon's timer service. The zero value is a host that
+	// runs none. See workspace_timers.go.
+	timers wsTimers
+
 	// raati is the deliberation board (the raati pane): at most one live
 	// deliberation, run over the workspace swarm. Zero value is an idle
 	// board. See workspace_raati.go.
@@ -594,6 +598,9 @@ func (w *Workspace) RefreshDefaults() error {
 // Close cancels in-flight turns, drains swarm sub-agents, closes open
 // session files, and releases the hook engine. Idempotent.
 func (w *Workspace) Close() error {
+	// Timers first, before the swarm and everything else a firing could
+	// reach, so that no timer fires into a daemon that is shutting down.
+	w.stopTimers()
 	// Drain swarm children BEFORE cancelling the workspace context: a
 	// graceful stop lets each child abort its turn, write its
 	// agent_stopped terminator, and flush its session — so the next
