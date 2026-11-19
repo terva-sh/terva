@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/internal/coretest"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
@@ -122,5 +123,57 @@ func TestHostToolDispatcherGateDenies(t *testing.T) {
 	content, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"x"}`), false)
 	if !isErr || !strings.Contains(content[0].Text, "denied") {
 		t.Errorf("gate should deny the call in plan mode, got isErr=%v %+v", isErr, content)
+	}
+}
+
+// 🚨 A host's guard binds this door too. An extension that runs a host tool
+// for a model meets the refusal that the model's own call meets, the tool
+// does not run, and the audit log holds the refusal.
+func TestHostToolDispatcherAsksTheHostsGuards(t *testing.T) {
+	home := testsupport.TempDir(t)
+	prev := auditSink
+	auditSink = newAuditLog(home)
+	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
+
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"echo": echoTool{}})
+	guard := func(_ context.Context, tool string, args json.RawMessage) string {
+		if strings.Contains(string(args), "merge") {
+			return "the guard refuses a merge"
+		}
+		return ""
+	}
+	// A nil gate allows every call, so only the guard can refuse here.
+	d := buildHostToolDispatcher(ag, nil, fakeHostToolSource{}, nil, guard)
+	content, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"merge it"}`), false)
+	if !isErr || !strings.Contains(content[0].Text, "the guard refuses a merge") {
+		t.Fatalf("the guard's refusal must reach the extension, got isErr=%v %+v", isErr, content)
+	}
+	if content, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"hi"}`), false); isErr {
+		t.Fatalf("a call that the guard has no word on must run: %+v", content)
+	}
+	auditSink.Close()
+	recs := readAuditLines(t, home)
+	if len(recs) != 2 || recs[0].Decision != "deny" || recs[0].Reason != "the guard refuses a merge" || recs[1].Decision != "allow" {
+		t.Fatalf("the audit log must hold the refusal and then the call: %+v", recs)
+	}
+}
+
+// 🚨 The bounds of the shell parser bind this door with no guard of a host.
+// An extension that runs bash for a model meets the refusal, and the gate's
+// parser never reads the line.
+func TestHostToolDispatcherRefusesABashCommandPastTheBounds(t *testing.T) {
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"bash": echoTool{}})
+	gate := permission.NewPolicyGate(permissions.NewPolicy(permission.ApprovalYolo, nil), nil)
+	d := buildHostToolDispatcher(ag, gate, fakeHostToolSource{})
+	deep, err := json.Marshal(map[string]string{"command": strings.Repeat("(", 250000) + "true" + strings.Repeat(")", 250000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, isErr := d(context.Background(), "ext", "bash", deep, false)
+	if !isErr || !strings.Contains(content[0].Text, "this long or this deep") {
+		t.Fatalf("a deep line must be refused, got isErr=%v %+v", isErr, content)
+	}
+	if content, isErr := d(context.Background(), "ext", "bash", json.RawMessage(`{"command":"ls"}`), false); isErr {
+		t.Fatalf("a short command must run: %+v", content)
 	}
 }

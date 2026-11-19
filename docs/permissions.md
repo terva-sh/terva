@@ -616,6 +616,123 @@ member and does not bind it. A git alias, a shell variable, eval, another
 interpreter, or a direct edit of a ticket file gets past it. Each of those
 writes a file under `.tickets/`, which the diff shows to the member's reviewer.
 
+## The unattended merge rule
+
+A talkoot [routine](talkoot.md#approve-work-on-a-schedule) starts work that no
+person began. That work has an attended agent's authority minus the merge. It
+may push its own branch and open a pull request. It never merges, and it never
+moves a protected branch (decision 0029, rules 14 and 15).
+
+The rule is a rung of the daemon's own, ahead of your hooks and your rules. A
+hook's allow, an `allow` rule, and `yolo` all leave it in place. It reads each
+call at the time of the call, because a member works in a chain that a routine
+began on one turn and in a chain that you began on the next. In work that you
+started the rule has no word, and a merge reaches the approval path that every
+other command does. A refusal names `the unattended merge rule` and says what
+the rule found, and the audit log records it.
+
+The rule refuses a call that does one of these:
+
+| What the call does | Examples |
+|---|---|
+| Merges through a forge's CLI or a script: the word `pr`, `pull` or `mr`, and then `merge` | `gh pr merge 12`, `tea pulls merge 12`, `glab mr merge 12`, `./scripts/pr.sh merge 12` |
+| Runs a recipe whose name says that it merges | `just pr-merge 12`, `make merge-pr` |
+| Names a forge's merge endpoint | `curl -X POST https://forge.example/api/v1/repos/o/r/pulls/12/merge`, the GraphQL mutation `mergePullRequest` |
+| Pushes to a protected branch | `git push origin HEAD:main`, `git push origin --delete main` |
+| Pushes more branches than it names | `git push --all`, `git push --mirror` |
+| Pushes to a place that the rule cannot read | `git push origin "$branch"`, `git checkout main && git push` |
+| Calls a tool of an extension or an MCP server whose name says merge and pull request | `mcp_github_merge_pull_request` |
+| Gives such a tool a merge endpoint at any depth of its arguments, or a command that the rows above refuse, under the name `command`, `cmd`, `script`, `shell`, `bash` or `sh` | `{"command": "gh pr merge 12"}` |
+
+The rule reads the path of an endpoint as curl and the forge clean it. So
+`/pulls/12/./merge` and `/pulls/12/%6derge` are the same endpoint as
+`/pulls/12/merge`.
+
+The rule does not ask which program gets the words. It refuses
+`echo pr merge` too, because `$(echo gh pr merge 12)` runs the merge. A text
+in quotes that is one word passes, as in `git commit -m 'pr merge notes'`.
+
+A protected branch is `main`, `master`, `trunk`, and the default branch of
+each remote. The rule reads that default from `refs/remotes/<remote>/HEAD`.
+Run `git remote set-head origin -a` when that ref is missing or old.
+
+A push that names no branch goes where git's configuration sends it. The rule
+therefore reads `push.default`, the upstream of the branch at work,
+`branch.autoSetupMerge`, and each remote's push refspec and mirror mark. A
+topic branch whose upstream is trunk moves trunk under
+`push.default = upstream`, and the rule refuses that push. A line that also
+changes the directory or git's configuration leaves the rule with no way to
+know where the push goes. So does a line that sets a variable that git reads,
+such as `GIT_DIR` or `HOME`, and an option of git that the rule does not
+know. It refuses, and it tells the agent to name the remote and the branch.
+A `cd` to the top level of the repository changes nothing, and the rule lets
+it pass. A `cd` to a directory inside the repository does not pass, because
+a repository of its own can be there. Each call of `bash` starts in the
+session's directory, so a `cd` in one call does not reach the push of the
+next one.
+
+The rule reads each change of the branch in front of a push. A new branch is
+certain only when `&&` joins the push to it, as in
+`git checkout -b fix/y && git push -u origin HEAD`. With a `;` between the two
+the checkout can fail, and the push then runs on the first branch. Such a
+push must pass on both branches. It passes on a topic branch, and the rule
+refuses it on trunk. A checkout of a branch by its name tells the rule
+nothing, because the same command restores a file of that name.
+
+The rule reads a variable that the line itself sets. So
+`b=feat/x; git push origin "$b:$b"` passes. A variable from outside the line
+is a word that the rule cannot read. So is a variable that the line fills
+with `read` or in a loop. A push with such a word is a push that the rule
+cannot read.
+
+A push that names a branch with one side, as `git push origin feat/x` does,
+goes where a push refspec of the remote sends it. The rule lets it pass when
+the remote has no such refspec. In any doubt it asks for both sides:
+`git push origin HEAD:refs/heads/feat/x`. A tool of an extension runs its
+command in a directory that the daemon does not know, so there the rule
+always asks for both sides.
+
+Two keys of `talkoot_routines` in your user configuration add to the rule:
+
+```json
+{
+  "talkoot_routines": {
+    "max": 5,
+    "merge_commands": ["^just land\\b", "deploy\\.sh --prod"],
+    "protected_branches": ["release", "release/*"]
+  }
+}
+```
+
+| Key | What it adds |
+|---|---|
+| `merge_commands` | RE2 patterns for a command that merges. Each one is tried against the whole line and against each command in it, with the quotes removed |
+| `protected_branches` | Branches that such work may not push to. A name may hold the wildcards of a shell |
+
+The rule reads a line inside a line: the argument of `sh -c` and of `eval`,
+a here document that a shell reads, and the value of an alias. A shell at the
+end of a pipe runs a text that the rule cannot know, so there a word of a
+merge or of a push anywhere on the line is enough for a refusal.
+
+A line has bounds: the bounds of every `bash` command (128 KiB and 16,384
+marks that can nest), and four shells inside each other. The rule refuses a line past a bound, and it tells the agent to write
+a file and to run a short command. It also refuses arguments that it cannot
+decode.
+
+A pattern that does not compile turns routines off, and the team's section of
+the rail says why. Each pattern that does compile stays in force for work of
+a routine that has not ended yet.
+
+**The rule explains, and the forge account binds.** The rule reads the text of
+a command, so a shell can get past it. A script that the agent wrote passes,
+and so do an alias or a variable that a file sets, and another
+interpreter. The rule also does not reach a swarm child's own session, or the
+shell of a member that another harness runs, such as Claude Code. Its job is
+to tell an agent why the merge is not its to make, at each route that it
+tries. The guard that holds is on the forge. Run the daemon of unattended
+work under a forge account that has no right to merge to trunk, and protect
+trunk there. The rule then covers a mistake, and the account covers the rest.
+
 ## Permission rules
 
 Rules let you pre-answer the prompt for specific calls. They live in
@@ -651,6 +768,16 @@ and the line auto-runs only if every command would on its own. So an
 `allow` rule scoped to `^git ` cannot clear an `rm` that rides the same
 line, and an anchored `deny` (`^rm `) still matches a command that isn't
 first. An unparsable line falls back to matching the whole string.
+
+A `bash` command has bounds: 128 KiB, and 16,384 marks that can nest, such
+as `(`, `{`, `[`, `|` and `&`. The text of the commands that it splits into
+has a bound too, which only a line of commands inside commands reaches, as in
+`echo $(echo $(echo ...))`. terva refuses a command past a bound in every
+approval mode, and it tells the agent to write a file and to run a short
+command. A line that deep ends the process in the shell parser, and a line
+that terva does not split into its commands would hide a command from a rule.
+On Linux the shell gets a command as one argument of 128 KiB at most, so the
+first bound stops no command that ran there before.
 
 Rules come from three layers: your **user** config, a project's
 `.terva/config.json`, and installed **extension** bundles (the

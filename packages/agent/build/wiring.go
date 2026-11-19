@@ -724,6 +724,34 @@ func HookSpecsFor(args Args, trusted bool) *hooks.Config {
 	return config.MergeHookConfigs(user.Hooks, config.TrustedProjectHooks(args.CWD, trusted))
 }
 
+// shellBoundsGuard refuses a bash call whose command terva does not split
+// into its commands (tools.ShellUnreadable). It is a guard of every host,
+// ahead of each host's own.
+//
+// 🚨 The policy splits a bash command with a shell parser. The parser ends the
+// process on a line past its bounds, and a line of commands inside commands
+// splits into text of many times its length. A line that is not split is
+// judged as one unit, and then a rule for one program would cover every
+// command that hides in the line. So the call is refused, and it is not
+// given to the policy as one unit.
+func shellBoundsGuard(_ context.Context, tool string, args json.RawMessage) string {
+	if tool != "bash" {
+		return ""
+	}
+	var a struct {
+		Command string `json:"command"`
+	}
+	// Arguments that do not decode never run: the tool refuses them.
+	if json.Unmarshal(args, &a) != nil || !tools.ShellUnreadable(a.Command) {
+		return ""
+	}
+	return tools.ShellTooLong
+}
+
+// CallGuard is a rung that a host puts ahead of the ladder. It returns why a
+// call is refused, or an empty text for a call that it has no word on.
+type CallGuard func(ctx context.Context, tool string, args json.RawMessage) string
+
 // BuildToolGate composes the tool-call ladder in its canonical order —
 // pre-hooks (may rewrite args; allow/deny are final), the confirm gate
 // (sees post-rewrite args), then the extension intercept — as the
@@ -746,7 +774,24 @@ func HookSpecsFor(args Args, trusted bool) *hooks.Config {
 // tool that does not opt in. This used to take the agent and resolve the tool
 // itself through ag.ToolForCall, which forced every host to build the agent
 // before its gate; inside a turn that lookup returned this same tool.
-func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *extensions.Manager) core.Gate {
+//
+// A guard is a rung of the host's own, ahead of all three. Its refusal is
+// final: no hook's allow, no rule and no posture reaches past it. A hook or
+// an extension can rewrite the arguments after a guard read them, so each
+// guard reads a rewrite again.
+func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *extensions.Manager, guards ...CallGuard) core.Gate {
+	guards = append([]CallGuard{shellBoundsGuard}, guards...)
+	guarded := func(ctx context.Context, name string, args json.RawMessage) string {
+		for _, g := range guards {
+			if g == nil {
+				continue
+			}
+			if why := g(ctx, name, args); why != "" {
+				return why
+			}
+		}
+		return ""
+	}
 	return core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, tool core.Tool) (allowed bool, reason string, modArgs json.RawMessage) {
 		args := call.Arguments
 		// Audit every call with the gate's decision and the mode in force, so
@@ -762,6 +807,9 @@ func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *
 			auditSink.Record(time.Now(), auditViaToolCall, call.Name, args, mode, allowed, reason)
 		}()
 
+		if why := guarded(ctx, call.Name, args); why != "" {
+			return false, why, nil
+		}
 		hookModified := false
 		skipGate := false
 		if hookEng != nil {
@@ -769,6 +817,9 @@ func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *
 			if hr.UpdatedArgs != nil {
 				args = hr.UpdatedArgs
 				hookModified = true
+				if why := guarded(ctx, call.Name, args); why != "" {
+					return false, why, nil
+				}
 			}
 			switch hr.Decision {
 			case hooks.DecisionDeny:
@@ -795,6 +846,9 @@ func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *
 			}
 			if res.ModifiedArgs != nil {
 				args = res.ModifiedArgs // reflect the rewrite in the audit line
+				if why := guarded(ctx, call.Name, args); why != "" {
+					return false, why, nil
+				}
 				return true, "", args
 			}
 		}

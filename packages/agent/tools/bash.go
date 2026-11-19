@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -126,6 +127,12 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// line end and reads "EOF", and the heredoc runs to the end of the script.
 	// Convert before the checks, so that they read the text that runs.
 	a.Command = strings.ReplaceAll(a.Command, "\r\n", "\n")
+	// 🚨 Refuse a line that terva does not split into its commands before a
+	// check or a runner parses it. A session with no sandbox and no gate
+	// gets this refusal too.
+	if ShellUnreadable(a.Command) {
+		return core.ToolResult{}, errors.New(ShellTooLong)
+	}
 	if err := t.Sandbox.CheckCommand(a.Command); err != nil {
 		return core.ToolResult{}, err
 	}

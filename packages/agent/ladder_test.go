@@ -200,3 +200,91 @@ func TestBuildHookEngineFromConfig(t *testing.T) {
 		t.Errorf("configured hook should deny, got %q", r.Decision)
 	}
 }
+
+// 🚨 A host's guard is ahead of the ladder, and its refusal is final. A
+// hook's allow skips the gate, and it does not skip a guard.
+func TestLadderGuardRefusesAheadOfAHooksAllow(t *testing.T) {
+	asked := 0
+	guard := func(_ context.Context, tool string, args json.RawMessage) string {
+		asked++
+		return "the guard says no to " + tool
+	}
+	fn := build.BuildToolGate(ladderEngine(t, "allow"), nil, nil, nil, guard)
+	allowed, reason, _ := callBash(fn, nil)
+	if allowed || reason != "the guard says no to bash" || asked != 1 {
+		t.Fatalf("the guard must refuse before the hook runs, got allowed=%v reason=%q asked=%d", allowed, reason, asked)
+	}
+	// Control: the same ladder with a guard that has no word lets the call run.
+	fn = build.BuildToolGate(ladderEngine(t, "allow"), nil, nil, func(context.Context, string, json.RawMessage) string { return "" })
+	if allowed, reason, _ := callBash(fn, nil); !allowed {
+		t.Fatalf("a guard with no word must not refuse, got %q", reason)
+	}
+}
+
+// 🚨 A hook can rewrite the arguments after a guard read them. The guard
+// reads the rewrite, so a hook cannot turn a harmless call into one that
+// the guard refuses.
+func TestLadderGuardReadsAHooksRewrite(t *testing.T) {
+	var seen []string
+	guard := func(_ context.Context, _ string, args json.RawMessage) string {
+		seen = append(seen, string(args))
+		if strings.Contains(string(args), "echo rewritten") {
+			return "the guard refuses the rewrite"
+		}
+		return ""
+	}
+	fn := build.BuildToolGate(ladderEngine(t, "rewrite"), nil, nil, guard)
+	allowed, reason, _ := callBash(fn, nil)
+	if allowed || reason != "the guard refuses the rewrite" {
+		t.Fatalf("the guard must refuse the rewritten call, got allowed=%v reason=%q", allowed, reason)
+	}
+	if len(seen) != 2 || !strings.Contains(seen[0], `"ls"`) {
+		t.Fatalf("the guard reads the call and then the rewrite, got %q", seen)
+	}
+}
+
+// 🚨 Every host's gate refuses a bash command past the bounds of the shell
+// parser, ahead of the policy. The policy splits a line into its commands
+// with that parser. A line that it cannot split is judged as one unit, and a
+// rule that names rm does not see an rm in the middle of that unit. So
+// 50,001 marks in a quoted text would hide a command from a deny rule.
+func TestLadderRefusesABashCommandPastTheBoundsOfTheParser(t *testing.T) {
+	withTempHome(t)
+	rules := []permission.PermissionRule{{Tool: "bash", Args: regexp.MustCompile(`^rm\b`), Decision: permission.RuleDeny, Source: "user"}}
+	fn := build.BuildToolGate(nil, permission.NewPolicyGate(permissions.NewPolicy(permission.ApprovalYolo, rules), nil), nil)
+	check := func(command string) (bool, string) {
+		args, err := json.Marshal(map[string]string{"command": command})
+		if err != nil {
+			t.Fatal(err)
+		}
+		allowed, reason, _ := fn.CheckTool(context.Background(), provider.ToolCallBlock{ID: "T1", Name: "bash", Arguments: args}, nil)
+		return allowed, reason
+	}
+	if allowed, reason := check("git status"); !allowed {
+		t.Fatalf("a short command must run, got %q", reason)
+	}
+	// Control: the policy sees the rm of a line that it can split.
+	if allowed, reason := check("git status; rm -rf x"); allowed || strings.Contains(reason, "this long or this deep") {
+		t.Fatalf("the deny rule must refuse the rm of a short line, got allowed=%v reason=%q", allowed, reason)
+	}
+	padded := "git status; rm -rf x; echo '" + strings.Repeat("(", 50001) + "'"
+	if allowed, reason := check(padded); allowed || !strings.Contains(reason, "this long or this deep") {
+		t.Fatalf("a line past the bounds must be refused by its length, got allowed=%v reason=%q", allowed, reason)
+	}
+	// A line that ended the process in the parser.
+	deep := strings.Repeat("(", 250000) + "true" + strings.Repeat(")", 250000)
+	if allowed, reason := check(deep); allowed || !strings.Contains(reason, "this long or this deep") {
+		t.Fatalf("a deep line must be refused, got allowed=%v reason=%q", allowed, reason)
+	}
+	// A line of commands inside commands is within the bounds of the parser,
+	// and terva does not split it either. The rm hides in it as well.
+	nested := strings.Repeat("echo $(", 8000) + "rm -rf x" + strings.Repeat(")", 8000)
+	if allowed, reason := check(nested); allowed || !strings.Contains(reason, "this long or this deep") {
+		t.Fatalf("a line of commands inside commands must be refused, got allowed=%v reason=%q", allowed, reason)
+	}
+	// Another tool with a long text is no bash command.
+	args, _ := json.Marshal(map[string]string{"command": deep})
+	if allowed, reason, _ := fn.CheckTool(context.Background(), provider.ToolCallBlock{ID: "T2", Name: "write", Arguments: args}, nil); !allowed {
+		t.Fatalf("the bounds are for bash alone, got %q", reason)
+	}
+}

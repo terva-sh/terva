@@ -36,7 +36,11 @@ var hostGateSeq atomic.Uint64
 // MCP tools (read/grep/glob/bash/web/…). Trust is already enforced
 // upstream — an untrusted project's extensions never load, so a loaded
 // extension is either the user's own or one a trusted project shipped.
-func buildHostToolDispatcher(ag *core.Agent, gate *permission.ConfirmGate, mgr hostToolSource) extdriver.HostToolDispatcher {
+//
+// A guard is the host's own rung, as in BuildToolGate. An extension that
+// runs bash for a model must meet the same refusal as the model's own call.
+func buildHostToolDispatcher(ag *core.Agent, gate *permission.ConfirmGate, mgr hostToolSource, guards ...CallGuard) extdriver.HostToolDispatcher {
+	guards = append([]CallGuard{shellBoundsGuard}, guards...)
 	return func(ctx context.Context, extName, toolName string, args json.RawMessage, silent bool) ([]extproto.ContentBlock, bool) {
 		errOut := func(msg string) ([]extproto.ContentBlock, bool) {
 			return []extproto.ContentBlock{{Type: "text", Text: msg}}, true
@@ -60,6 +64,15 @@ func buildHostToolDispatcher(ag *core.Agent, gate *permission.ConfirmGate, mgr h
 		// call's, and a borrowed "current call" id would collide in the
 		// confirmer's pending map (the answer reaches one of them, the other
 		// wedges until turn cancel).
+		for _, g := range guards {
+			if g == nil {
+				continue
+			}
+			if why := g(ctx, toolName, args); why != "" {
+				recordGateAudit(auditViaHostToolCall, toolName, args, gate, false, why)
+				return errOut(fmt.Sprintf("host_tool_call: %q denied: %s", toolName, why))
+			}
+		}
 		preview := permission.ToolPreview(tool, args, 120)
 		callID := fmt.Sprintf("hostcall-%s-%d", extName, hostGateSeq.Add(1))
 		allowed, reason, _ := gate.Check(ctx, toolName, args, preview, callID)
@@ -100,7 +113,7 @@ func contentBlocksFromResult(content []provider.Content) []extproto.ContentBlock
 // scripting host-call path (terva_scripting's code_execution — a no-op
 // stub otherwise), which needs the same ag+gate pair but must not depend
 // on an extension manager being present.
-func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate) {
+func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate, guards ...CallGuard) {
 	if ag == nil {
 		return
 	}
@@ -108,5 +121,5 @@ func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *pe
 	if extMgr == nil {
 		return
 	}
-	extMgr.SetHostToolDispatcher(buildHostToolDispatcher(ag, gate, extMgr))
+	extMgr.SetHostToolDispatcher(buildHostToolDispatcher(ag, gate, extMgr, guards...))
 }

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -557,8 +558,15 @@ func (s *Sandbox) CheckCommand(cmd string) error {
 	if cmd == "" {
 		return nil
 	}
-	scopes := DecomposeBashCommand(cmd)
-	if len(scopes) == 0 {
+	// 🚨 A line that terva does not split into its commands gets no check
+	// of the whole line, because a command would hide in it. One call gives
+	// the commands and that answer, so this check cannot get the first
+	// without the second.
+	scopes, unreadable := splitBashCommand(cmd)
+	if unreadable {
+		return errors.New(ShellTooLong)
+	}
+	if len(scopes) < 2 {
 		scopes = []string{cmd}
 	}
 	for _, sc := range scopes {

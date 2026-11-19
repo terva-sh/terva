@@ -46,6 +46,11 @@ func BashGrantScopes(command string) []permission.GrantScope {
 	if command == "" {
 		return nil
 	}
+	// 🚨 The parser ends the process on a line past the bounds. Such a line
+	// gets no narrow grant.
+	if ShellPastBounds(command) {
+		return nil
+	}
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
 		return nil
