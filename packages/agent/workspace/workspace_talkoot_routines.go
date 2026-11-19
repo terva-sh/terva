@@ -742,8 +742,8 @@ func (w *Workspace) talkootRoutinesView(id string) *ctrlproto.TalkootRoutines {
 		return nil
 	}
 	// The run of each routine that is at work now, by routine, and what each
-	// routine's runs spent today.
-	atWork, spent := map[string]string{}, map[string]float64{}
+	// routine's runs spent and its chains asked for today.
+	atWork, spent, reviews := map[string]string{}, map[string]float64{}, map[string]int{}
 	if run != nil {
 		_ = run.do(func(rt *talkoot.Router) error {
 			for _, rr := range rt.OpenRuns() {
@@ -751,11 +751,15 @@ func (w *Workspace) talkootRoutinesView(id string) *ctrlproto.TalkootRoutines {
 			}
 			for _, r := range list {
 				spent[r.ID] = rt.RoutineSpend(r.ID)
+				reviews[r.ID] = rt.RoutineReviews(r.ID)
 			}
 			return nil
 		})
 	}
-	out := &ctrlproto.TalkootRoutines{On: pol.On, Problem: pol.Problem, Routines: make([]ctrlproto.TalkootRoutine, 0, len(list)+len(damaged))}
+	out := &ctrlproto.TalkootRoutines{
+		On: pol.On, Problem: pol.Problem, ReviewsCounted: len(pol.ReviewCommands) > 0,
+		Routines: make([]ctrlproto.TalkootRoutine, 0, len(list)+len(damaged)),
+	}
 	svc := w.Timers()
 	if pol.On {
 		out.Max = pol.Max
@@ -773,7 +777,7 @@ func (w *Workspace) talkootRoutinesView(id string) *ctrlproto.TalkootRoutines {
 	}
 	for _, r := range list {
 		wr := wireRoutine(r)
-		wr.RunSession, wr.SpentTodayUSD = atWork[r.ID], spent[r.ID]
+		wr.RunSession, wr.SpentTodayUSD, wr.ReviewsToday = atWork[r.ID], spent[r.ID], reviews[r.ID]
 		if r.Status == talkoot.RoutineActive {
 			if ti, ok := infos[r.ID]; ok {
 				wr.Next, wr.Problem = ti.Next, ti.Problem
@@ -824,7 +828,10 @@ func wireRoutine(r talkoot.Routine) ctrlproto.TalkootRoutine {
 func wireRoutineAsk(p talkoot.Proposal) *ctrlproto.TalkootRoutineAsk {
 	a := *p.Routine
 	pol := config.TalkootRoutines()
-	out := &ctrlproto.TalkootRoutineAsk{Kind: a.Kind, Schedule: a.Schedule, Prompt: a.Prompt, Command: a.Command}
+	out := &ctrlproto.TalkootRoutineAsk{
+		Kind: a.Kind, Schedule: a.Schedule, Prompt: a.Prompt, Command: a.Command,
+		ReviewsCounted: len(pol.ReviewCommands) > 0,
+	}
 	if !pol.On {
 		out.DefaultsUnknown = true
 		for _, d := range a.Set() {

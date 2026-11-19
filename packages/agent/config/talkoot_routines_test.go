@@ -148,3 +148,83 @@ func TestTheQuestionWaitOfARoutinesChain(t *testing.T) {
 		t.Fatalf("a policy that is off still has a wait: %+v", got)
 	}
 }
+
+// The patterns that a person adds to the merge rule of a chain that no
+// person began (decision 0029 rule 15).
+func TestTheMergeRulesPatternsOfARoutinesChain(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	on := true
+	save := func(c TalkootRoutinesConfig) TalkootRoutinePolicy {
+		t.Helper()
+		if err := SaveConfig(Config{TalkootEnabled: &on, TalkootRoutines: &c}); err != nil {
+			t.Fatal(err)
+		}
+		return TalkootRoutines()
+	}
+	got := save(TalkootRoutinesConfig{Max: 2, MergeCommands: []string{`^just land\b`}, ProtectedBranches: []string{"release", "release/*"}})
+	if !got.On || len(got.MergeCommands) != 1 || !got.MergeCommands[0].MatchString("just land 12") || len(got.ProtectedBranches) != 2 {
+		t.Fatalf("the key sets the patterns: %+v", got)
+	}
+	// 🚨 A pattern that does not compile turns routines off. A pattern that
+	// a person mistyped must not become a rule that matches nothing in
+	// silence. Every pattern that does compile still binds a chain at work.
+	for name, tc := range map[string]struct {
+		c    TalkootRoutinesConfig
+		want string
+	}{
+		"a merge pattern that does not compile": {TalkootRoutinesConfig{Max: 2, MergeCommands: []string{`^just land\b`, `(`}, ProtectedBranches: []string{"release"}}, `merge_commands holds "("`},
+		"an empty merge pattern":                {TalkootRoutinesConfig{Max: 2, MergeCommands: []string{`^just land\b`, " "}, ProtectedBranches: []string{"release"}}, `merge_commands holds " "`},
+		"a branch pattern that does not parse":  {TalkootRoutinesConfig{Max: 2, MergeCommands: []string{`^just land\b`}, ProtectedBranches: []string{"release", "[a"}}, `protected_branches holds "[a"`},
+		"a problem in another field":            {TalkootRoutinesConfig{MergeCommands: []string{`^just land\b`}, ProtectedBranches: []string{"release"}}, "max is 0"},
+		"a wait that is no duration":            {TalkootRoutinesConfig{Max: 2, QuestionWait: "soon", MergeCommands: []string{`^just land\b`}, ProtectedBranches: []string{"release"}}, "question_wait"},
+	} {
+		got := save(tc.c)
+		if got.On || !strings.Contains(got.Problem, tc.want) {
+			t.Errorf("%s: got %+v, want off with a problem that holds %q", name, got, tc.want)
+		}
+		if len(got.MergeCommands) != 1 || !got.MergeCommands[0].MatchString("just land 12") || len(got.ProtectedBranches) != 1 || got.ProtectedBranches[0] != "release" {
+			t.Errorf("%s: the patterns that compile are kept: %+v", name, got)
+		}
+	}
+}
+
+// The patterns that name a review request (decision 0029 rule 17).
+func TestThePatternsOfAReviewRequest(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	on := true
+	save := func(c TalkootRoutinesConfig) TalkootRoutinePolicy {
+		t.Helper()
+		if err := SaveConfig(Config{TalkootEnabled: &on, TalkootRoutines: &c}); err != nil {
+			t.Fatal(err)
+		}
+		return TalkootRoutines()
+	}
+	if got := save(TalkootRoutinesConfig{Max: 2}); !got.On || len(got.ReviewCommands) != 0 {
+		t.Fatalf("a key with no pattern names no review request: %+v", got)
+	}
+	got := save(TalkootRoutinesConfig{Max: 2, ReviewCommands: []string{`^just pr-review\b`, `^tea pulls review\b`}})
+	if !got.On || len(got.ReviewCommands) != 2 || !got.ReviewCommands[0].MatchString("just pr-review 12") || !got.ReviewCommands[1].MatchString("tea pulls review 12") {
+		t.Fatalf("the key sets the patterns: %+v", got)
+	}
+	// 🚨 A pattern that does not compile turns routines off. A pattern that a
+	// person mistyped must not become a count of nothing in silence. Every
+	// pattern that does compile still counts for a chain at work, beside a
+	// problem in any field.
+	for name, tc := range map[string]struct {
+		c    TalkootRoutinesConfig
+		want string
+	}{
+		"a pattern that does not compile": {TalkootRoutinesConfig{Max: 2, ReviewCommands: []string{`^just pr-review\b`, `(`}}, `review_commands holds "("`},
+		"an empty pattern":                {TalkootRoutinesConfig{Max: 2, ReviewCommands: []string{`^just pr-review\b`, " "}}, `review_commands holds " "`},
+		"a problem in another field":      {TalkootRoutinesConfig{ReviewCommands: []string{`^just pr-review\b`}}, "max is 0"},
+		"a wait that is no duration":      {TalkootRoutinesConfig{Max: 2, QuestionWait: "soon", ReviewCommands: []string{`^just pr-review\b`}}, "question_wait"},
+	} {
+		got := save(tc.c)
+		if got.On || !strings.Contains(got.Problem, tc.want) {
+			t.Errorf("%s: got %+v, want off with a problem that holds %q", name, got, tc.want)
+		}
+		if len(got.ReviewCommands) != 1 || !got.ReviewCommands[0].MatchString("just pr-review 12") {
+			t.Errorf("%s: the patterns that compile are kept: %+v", name, got)
+		}
+	}
+}

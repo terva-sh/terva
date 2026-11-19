@@ -20,11 +20,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,6 +96,12 @@ func main() {
 				case "cancel":
 					emit("turn_end", map[string]any{"stop": "cancelled"})
 				case "user":
+					// "review N" asks the supervisor to count N review
+					// requests, as the gate of a real child does, and
+					// reports the answer in place of the echo.
+					if n, ok := reviewAsk(text); ok {
+						text = reviewAnswer(inboxPath, n)
+					}
 					runTurn(emit, text, turn)
 					turn++
 				}
@@ -122,6 +131,32 @@ func runTurn(emit emitter, text string, step int) {
 		},
 	})
 	emit("turn_end", map[string]any{"stop": "end"})
+}
+
+// reviewAsk reads the count of a "review N" line.
+func reviewAsk(text string) (n int, ok bool) {
+	rest, ok := strings.CutPrefix(text, "review ")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest)
+	return n, err == nil
+}
+
+// reviewAnswer asks on the review socket and writes what came back. A child
+// with no mark says so and asks nothing.
+func reviewAnswer(inbox string, n int) string {
+	if os.Getenv("TERVA_"+swarm.UnattendedEnv) == "" {
+		return "no mark"
+	}
+	deny, err := swarm.AskReviews(context.Background(), inbox, n)
+	switch {
+	case err != nil:
+		return "no answer: " + err.Error()
+	case deny != "":
+		return "denied: " + deny
+	}
+	return "counted " + strconv.Itoa(n)
 }
 
 type emitter = func(string, map[string]any)

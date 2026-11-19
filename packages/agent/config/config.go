@@ -203,6 +203,14 @@ type Config struct {
 	// from a person, and a cloned repository must not turn that on.
 	TalkootWakes *TalkootWakesConfig `json:"talkoot_wakes,omitempty"`
 
+	// TalkootRoutines lets a talkoot member ask for a routine: a recurring
+	// timer that a person approves from its card (decision 0029 rules 4 and
+	// 5). Unset means no member can ask for one. The key also holds the
+	// defaults of each kind of routine. User layer only, with no ProjectConfig
+	// counterpart: a default is authority that the card does not show, and a
+	// cloned repository must not set it.
+	TalkootRoutines *TalkootRoutinesConfig `json:"talkoot_routines,omitempty"`
+
 	// AutoSwarmNudge controls whether, when auto-swarm is enabled, the system
 	// prompt carries the proactive-delegation guidance (the swarm addendum).
 	// Independent of AutoSwarmEnabled: the tool availability is one toggle, the
@@ -649,6 +657,46 @@ type TalkootWakesConfig struct {
 	// MaxDelay is the longest delay a wake may have, as a Go duration such
 	// as "90m" or "24h". Empty means 24h.
 	MaxDelay string `json:"max_delay,omitempty"`
+}
+
+// TalkootRoutinesConfig is the talkoot_routines key.
+type TalkootRoutinesConfig struct {
+	// Max is how many routines one talkoot may hold, the paused ones
+	// included. Routines are off below 1.
+	Max int `json:"max"`
+	// Kinds holds the defaults of each kind of routine: watcher, brief and
+	// task. A kind or a field that is left out takes the built-in default.
+	Kinds map[string]TalkootRoutineKindConfig `json:"kinds,omitempty"`
+	// QuestionWait is how long a question or an approval waits for a person
+	// in a chain that a routine began, as a Go duration such as "90m" or
+	// "8h". Empty means 4h. After it the chain ends (decision 0029 rule 12).
+	QuestionWait string `json:"question_wait,omitempty"`
+	// MergeCommands are patterns for a command that merges, beside the ones
+	// that terva knows. A chain that no person began is refused a command
+	// that one of them matches (decision 0029 rule 15). Each is an RE2
+	// pattern, tried against the whole line and against each command in it.
+	MergeCommands []string `json:"merge_commands,omitempty"`
+	// ProtectedBranches are branches that such a chain may not push to,
+	// beside main, master, trunk and each remote's default branch. A name
+	// may hold the wildcards of a shell, as in "release/*".
+	ProtectedBranches []string `json:"protected_branches,omitempty"`
+	// ReviewCommands are patterns for a command that asks for a model
+	// review. Each one that a chain of a routine runs counts against the
+	// routine's reviews for one day (decision 0029 rule 17). Each is an RE2
+	// pattern, tried against each command of a line. With none, nothing
+	// counts, and a routine's limit on reviews binds nothing.
+	ReviewCommands []string `json:"review_commands,omitempty"`
+}
+
+// TalkootRoutineKindConfig holds the defaults of one kind of routine. A nil
+// field takes the built-in default.
+type TalkootRoutineKindConfig struct {
+	EndAfterRuns   *int     `json:"end_after_runs,omitempty"`
+	EndAfterDays   *int     `json:"end_after_days,omitempty"`
+	SpendUSDPerDay *float64 `json:"spend_usd_per_day,omitempty"`
+	ReviewsPerDay  *int     `json:"reviews_per_day,omitempty"`
+	FollowUps      *int     `json:"follow_ups,omitempty"`
+	CatchUp        *bool    `json:"catch_up,omitempty"`
 }
 
 // EndpointConfig defines one user-supplied backend. The provider id is the map

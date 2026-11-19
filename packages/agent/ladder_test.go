@@ -209,13 +209,13 @@ func TestLadderGuardRefusesAheadOfAHooksAllow(t *testing.T) {
 		asked++
 		return "the guard says no to " + tool
 	}
-	fn := build.BuildToolGate(ladderEngine(t, "allow"), nil, nil, nil, guard)
+	fn := build.BuildToolGate(ladderEngine(t, "allow"), nil, nil, nil, build.CallGuard(guard))
 	allowed, reason, _ := callBash(fn, nil)
 	if allowed || reason != "the guard says no to bash" || asked != 1 {
 		t.Fatalf("the guard must refuse before the hook runs, got allowed=%v reason=%q asked=%d", allowed, reason, asked)
 	}
 	// Control: the same ladder with a guard that has no word lets the call run.
-	fn = build.BuildToolGate(ladderEngine(t, "allow"), nil, nil, func(context.Context, string, json.RawMessage) string { return "" })
+	fn = build.BuildToolGate(ladderEngine(t, "allow"), nil, nil, build.CallGuard(func(context.Context, string, json.RawMessage) string { return "" }))
 	if allowed, reason, _ := callBash(fn, nil); !allowed {
 		t.Fatalf("a guard with no word must not refuse, got %q", reason)
 	}
@@ -233,13 +233,69 @@ func TestLadderGuardReadsAHooksRewrite(t *testing.T) {
 		}
 		return ""
 	}
-	fn := build.BuildToolGate(ladderEngine(t, "rewrite"), nil, nil, guard)
+	fn := build.BuildToolGate(ladderEngine(t, "rewrite"), nil, nil, build.CallGuard(guard))
 	allowed, reason, _ := callBash(fn, nil)
 	if allowed || reason != "the guard refuses the rewrite" {
 		t.Fatalf("the guard must refuse the rewritten call, got allowed=%v reason=%q", allowed, reason)
 	}
 	if len(seen) != 2 || !strings.Contains(seen[0], `"ls"`) {
 		t.Fatalf("the guard reads the call and then the rewrite, got %q", seen)
+	}
+}
+
+// 🚨 A host's rung behind the ladder runs one time, for a call that every
+// other rung allowed, with the arguments that the tool gets. A count that a
+// host keeps there is a count of calls that run. A guard is the wrong place
+// for a count: it runs again for a rewrite, and it runs for a call that a
+// hook or the policy then refuses.
+func TestLadderRungBehindRunsOnceForACallThatRuns(t *testing.T) {
+	withTempHome(t)
+	var seen []string
+	after := build.AfterAllow(func(_ context.Context, tool string, args json.RawMessage) string {
+		seen = append(seen, tool+" "+string(args))
+		return ""
+	})
+	deny := func(pattern string) *permission.ConfirmGate {
+		rules := []permission.PermissionRule{{Tool: "bash", Args: regexp.MustCompile(pattern), Decision: permission.RuleDeny, Source: "user"}}
+		return permission.NewPolicyGate(permissions.NewPolicy(permission.ApprovalYolo, rules), nil)
+	}
+	// A hook rewrites the arguments. The rung reads the rewrite, one time,
+	// and the tool gets the same arguments.
+	fn := build.BuildToolGate(ladderEngine(t, "rewrite"), deny(`^never$`), nil, after)
+	allowed, reason, mod := callBash(fn, nil)
+	if !allowed || len(seen) != 1 || !strings.Contains(seen[0], "bash ") || !strings.Contains(seen[0], "echo rewritten") || !strings.Contains(string(mod), "echo rewritten") {
+		t.Fatalf("the rung behind must read the rewrite one time: allowed=%v reason=%q seen=%q mod=%s", allowed, reason, seen, mod)
+	}
+	// With no rewrite it reads the call as the model made it.
+	seen = nil
+	fn = build.BuildToolGate(nil, deny(`^never$`), nil, after)
+	if allowed, _, mod := callBash(fn, nil); !allowed || len(seen) != 1 || !strings.Contains(seen[0], `"ls"`) || mod != nil {
+		t.Fatalf("the rung behind must read the call one time: allowed=%v seen=%q mod=%s", allowed, seen, mod)
+	}
+	// 🚨 A call that another rung refused does not reach it: a hook's deny,
+	// a rule's deny, and a guard.
+	seen = nil
+	for name, fn := range map[string]core.Gate{
+		"a hook's deny": build.BuildToolGate(ladderEngine(t, "deny"), nil, nil, after),
+		"a rule's deny": build.BuildToolGate(nil, deny(`^ls$`), nil, after),
+		"a guard": build.BuildToolGate(nil, nil, nil, after, build.CallGuard(func(context.Context, string, json.RawMessage) string {
+			return "the guard says no"
+		})),
+	} {
+		if allowed, _, _ := callBash(fn, nil); allowed || len(seen) != 0 {
+			t.Fatalf("%s: the rung behind must not run for a call that is refused: allowed=%v seen=%q", name, allowed, seen)
+		}
+	}
+	// 🚨 Its own refusal is final, behind a hook's allow too.
+	last := build.AfterAllow(func(context.Context, string, json.RawMessage) string { return "no request is left" })
+	fn = build.BuildToolGate(ladderEngine(t, "allow"), nil, nil, after, last)
+	if allowed, reason, _ := callBash(fn, nil); allowed || reason != "no request is left" || len(seen) != 1 {
+		t.Fatalf("the refusal of a rung behind must be final: allowed=%v reason=%q seen=%q", allowed, reason, seen)
+	}
+	// A nil rung of either kind is no rung.
+	fn = build.BuildToolGate(nil, nil, nil, build.AfterAllow(nil), build.CallGuard(nil), nil)
+	if allowed, reason, _ := callBash(fn, nil); !allowed {
+		t.Fatalf("a nil rung must not refuse, got %q", reason)
 	}
 }
 

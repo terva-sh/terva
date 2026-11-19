@@ -120,3 +120,19 @@ func TestSwarmEmitterStdoutShapeMatchesSupervisorParser(t *testing.T) {
 		t.Errorf("step field missing or wrong: %v", flat["step"])
 	}
 }
+
+// 🚨 TKT-01M7R5QJ. The child's gate gets the rules of unattended work when
+// the supervisor's variable is set, and only then. The variable is the one
+// that the runner writes (swarm.UnattendedEnv, under the product's prefix).
+func TestASwarmChildReadsItsMarkFromTheSupervisor(t *testing.T) {
+	t.Setenv("TERVA_"+swarm.UnattendedEnv, "")
+	if rungs := swarmChildRungs("/tmp/in.sock", testsupport.TempDir(t)); len(rungs) != 0 {
+		t.Fatalf("a child with no mark got %d rungs", len(rungs))
+	}
+	t.Setenv("TERVA_"+swarm.UnattendedEnv, "1")
+	// A guard ahead of the ladder and a count behind it, as the daemon's
+	// own session has (wsSession.rungs).
+	if rungs := swarmChildRungs("/tmp/in.sock", testsupport.TempDir(t)); len(rungs) != 2 {
+		t.Fatalf("a marked child got %d rungs, want the merge rule and the review count", len(rungs))
+	}
+}

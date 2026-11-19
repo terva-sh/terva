@@ -275,7 +275,7 @@ func New(cfg Config) *Swarm {
 		cfg.StopGrace = defaultStopGrace
 	}
 	if cfg.NewRunner == nil {
-		cfg.NewRunner = NewExecRunner
+		cfg.NewRunner = func(a *Agent) Runner { return NewExecRunner(a) }
 	}
 	s := &Swarm{
 		cfg:     cfg,
@@ -525,6 +525,16 @@ type SpawnRequest struct {
 	// narrows to none. The swarm carries it opaquely, as it does Approval.
 	Tools []string
 
+	// Unattended, when non-nil, marks the agent as work of a chain that no
+	// person began. The host that owns the chain writes it, and never from
+	// what a model wrote. A native child with the mark puts the host's
+	// rules for such work on its own gate (reviews.go).
+	//
+	// 🚨 The mark lasts for the agent's life. A child outlives the turn
+	// that started it and has no turn of its parent to read, so nothing
+	// clears it.
+	Unattended *Unattended
+
 	// OnTurnEnd, when set, is the agent's OnTurnEnd from its start. A caller
 	// that set it after SpawnReq returned could miss a fast first turn.
 	OnTurnEnd func(step int, errMsg string)
@@ -579,6 +589,16 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	task := strings.TrimSpace(req.Task)
 	if task == "" {
 		return nil, errors.New("swarm: empty task")
+	}
+	// 🚨 Each way to start an agent ends here, so the two rules of the mark
+	// are here and in no caller alone. A process that is itself unattended
+	// marks what it starts, whatever tool or engine asked. No marked agent
+	// runs on a worker backend.
+	if req.Unattended == nil {
+		req.Unattended = ProcessMark()
+	}
+	if req.Unattended != nil && strings.TrimSpace(req.Backend) != "" {
+		return nil, ErrUnattendedBackend
 	}
 	// The id is NAMED from the label when the caller supplied one, and from
 	// the task text otherwise. A fan-out shares its prompt preamble by
@@ -677,6 +697,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		Backend:      strings.TrimSpace(req.Backend),
 		Approval:     strings.TrimSpace(req.Approval),
 		Tools:        cloneTools(req.Tools),
+		Unattended:   cloneMark(req.Unattended),
 		Schema:       req.Schema,
 		SessionID:    sessionID,
 		InboxPath:    inboxPath,

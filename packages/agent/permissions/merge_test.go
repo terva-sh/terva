@@ -481,6 +481,70 @@ func TestAPersonsPatternsAddToTheRule(t *testing.T) {
 	}
 }
 
+// 🚨 bash runs some lines that the parser refuses: ((just land 12) ) is two
+// groups for bash. A pattern with an anchor matches no such line as a whole,
+// so the rule tries each pattern at the front of each word of the line.
+func TestAPersonsPatternInALineThatDoesNotParse(t *testing.T) {
+	r := MergeRule{Commands: []*regexp.Regexp{regexp.MustCompile(`^just land\b`), regexp.MustCompile(`(?i)\bdeploy\.sh --prod`)}}
+	for command, want := range map[string]bool{
+		"((just land 12) )":                true,
+		"((ju''st \"land\" 12) )":          true,
+		"((true; just land 12) )":          true,
+		"((./deploy.sh --prod) )":          true,
+		"x=$((1+)); sh -c '((just land))'": true,
+		// A word that only ends in the command is none, and a line with
+		// no word of it passes as it did.
+		"((adjust land 12) )": false,
+		"((just landing) )":   false,
+		"((true) )":           false,
+	} {
+		why := r.Match("bash", bashCall(t, command), factsOf(topic))
+		if want != strings.Contains(why, "merge command of the user configuration") || (!want && why != "") {
+			t.Errorf("%q gave %q, want a match of the person's pattern: %v", command, why, want)
+		}
+	}
+	// A rule with no pattern has no word on these lines.
+	if why := (MergeRule{}).Match("bash", bashCall(t, "((just land 12) )"), factsOf(topic)); why != "" {
+		t.Errorf("a rule with no pattern refused the line: %s", why)
+	}
+	// 🚨 The read word by word stays near the size of the line.
+	wordByWord(t, func(command string) {
+		if why := r.Match("bash", bashCall(t, command), factsOf(topic)); why != "" {
+			t.Errorf("a long line with no word of the command gave %q", why)
+		}
+	})
+}
+
+// wordByWord reads a line that does not parse at two sizes, and the time may
+// grow as the line grows and little faster.
+//
+// 🚨 A pattern with no fixed front reads its whole text for each word. With
+// no bound on that text the read takes the square of its line, and a line of
+// 8 times the size takes 64 times as long.
+//
+// ⚠️ A bound in seconds does not hold here. The race detector makes this
+// read twelve times slower, so a bound that passes there says nothing
+// without it.
+func wordByWord(t *testing.T, read func(command string)) {
+	t.Helper()
+	const n, by = 2000, 8
+	timed := func(n int) time.Duration {
+		command := strings.Repeat("a ", n) + "("
+		best := time.Hour
+		for range 2 {
+			start := time.Now()
+			read(command)
+			best = min(best, time.Since(start))
+		}
+		return best
+	}
+	small, large := timed(n), timed(n*by)
+	t.Logf("the read word by word: %s at %d words, %s at %d", small, n, large, n*by)
+	if large > 300*time.Millisecond && large > small*by*4 {
+		t.Errorf("the read word by word of a line of %d times the size took %s, and the smaller one %s", by, large, small)
+	}
+}
+
 func TestAToolOfAnExtensionThatMergesIsAMergeAction(t *testing.T) {
 	for tool, args := range map[string]string{
 		"mcp_github_merge_pull_request":    `{"owner":"o","repo":"r","pullNumber":12}`,
@@ -713,6 +777,23 @@ func TestTheRuleReadsWhatALineHides(t *testing.T) {
 // parser nests a pipe of n stages n deep, and a read at each node took 20
 // seconds for 500 stages.
 func TestALongLineIsReadInTime(t *testing.T) {
+	// ⚠️ A bound in seconds holds for one machine speed. The two lines of
+	// variables in shells end at the rule's work bound, and that takes 6 to
+	// 10 seconds with the race detector on a machine at a load of 11 over 12
+	// cores. At a load of 20 one of them took 22.7 seconds and failed a gate
+	// run on 2026-11-19 with nothing wrong. So the bound is also a multiple
+	// of a plain line that is timed in this same run: the load that slows
+	// one slows the other. That line took 1.8 seconds at the load of 11, so
+	// the slowest line here is 4 to 6 times it, and the two defects that
+	// this test guards were 30 times it and more.
+	plain := "echo" + strings.Repeat(" git", 20000)
+	unit := time.Hour
+	for range 2 {
+		start := time.Now()
+		(MergeRule{}).Match("bash", bashCall(t, plain), factsOf(topic))
+		unit = min(unit, time.Since(start))
+	}
+	t.Logf("the plain line of %d bytes took %s", len(plain), unit)
 	for name, command := range map[string]string{
 		"a pipe of shells":         "echo x" + strings.Repeat(" | sh", 4000),
 		"a pipe of other programs": "echo x" + strings.Repeat(" | cat", 15000),
@@ -769,10 +850,11 @@ func TestALongLineIsReadInTime(t *testing.T) {
 	} {
 		start := time.Now()
 		(MergeRule{}).Match("bash", bashCall(t, command), factsOf(topic))
-		// Each line takes under a second with the race detector on. The two
-		// defects that this test guards took 50 seconds and more.
-		if took := time.Since(start); took > 20*time.Second {
-			t.Errorf("%s: the rule took %s for a line of %d bytes", name, took, len(command))
+		// The two defects that this test guards took 50 seconds and more.
+		// A line fails when it passes both bounds: the seconds, and the
+		// multiple of the plain line.
+		if took := time.Since(start); took > 20*time.Second && took > 15*unit {
+			t.Errorf("%s: the rule took %s for a line of %d bytes, and the plain line took %s", name, took, len(command), unit)
 		}
 	}
 }

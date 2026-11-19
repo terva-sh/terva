@@ -135,6 +135,13 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"talkoot_chat.brief[]":                "times of day, such as 07:30, at which the bridge sends what it held",
 		"talkoot_chat.quiet":                  "a range of times of day, such as 22:00-07:00, in which the bridge holds its messages",
 		"talkoot_wakes.max_delay":             "a duration such as 24h: the longest delay of one wake",
+		"talkoot_routines.question_wait":      "a duration such as 4h: how long a question waits for a person in a routine's chain",
+
+		// The merge rule's patterns of a chain that no person began. They
+		// match the text of a command, and a person writes them as a rule.
+		"talkoot_routines.merge_commands[]":     "RE2 patterns for a command that merges, such as ^just land",
+		"talkoot_routines.protected_branches[]": "branch names and shell patterns, such as release/*",
+		"talkoot_routines.review_commands[]":    "RE2 patterns for a command that asks for a review, such as ^just pr-review",
 
 		// User-authored command lines. A token pasted inline into one is a real
 		// leak and is NOT covered: detecting it means pattern-sniffing shell,

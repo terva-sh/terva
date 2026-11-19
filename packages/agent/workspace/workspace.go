@@ -164,6 +164,11 @@ type Workspace struct {
 	// file I/O.
 	stateMu sync.Mutex
 
+	// boot names this daemon instance. A session's state file records it
+	// beside the sub-agents that wait for a report, so that the next instance
+	// can tell that a restart came between (workspace_swarm_record.go).
+	boot string
+
 	// restartMarker is a planned-restart marker recovered from disk at boot (nil
 	// unless the previous stop was an armed supervisor restart). It names the
 	// session that should resume and re-flavors that session's interrupted-call
@@ -336,6 +341,7 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 		ctx:        ctx,
 		cancel:     cancel,
 		sessions:   map[string]*wsSession{},
+		boot:       newBootID(),
 		credErr:    r.CredentialErr,
 		provSwitch: r.ProviderSwitch,
 		sandbox:    r.Sandbox, // shared across sessions; carries the initial jail lock
@@ -442,7 +448,9 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 // would strand a worker mid-task rather than merely stopping new ones.
 func (w *Workspace) newRunner(a *swarm.Agent) swarm.Runner {
 	if a.Backend == "" {
-		return swarm.NewExecRunner(a)
+		// The count is for a child with the mark of unattended work. The
+		// runner serves no socket for any other child.
+		return swarm.NewExecRunner(a, swarm.WithReviews(w.childReviews(a)))
 	}
 	b, err := worker.Lookup(a.Backend)
 	if err != nil {
@@ -607,9 +615,7 @@ func (w *Workspace) Close() error {
 	// launch's Reload shows "shutdown (offline)", resumable, instead of
 	// an event log cut off mid-sentence. (Children cannot survive the
 	// host anyway: the runner owns their stdout pipes.)
-	if w.swarm != nil {
-		w.swarm.StopAllAndWait(0)
-	}
+	w.stopSwarm()
 	// Stop chat bridges before cancelling the workspace context, so a connector's
 	// receive goroutine never outlives the workspace that owns it.
 	w.chatStopAll()
@@ -641,6 +647,25 @@ func (w *Workspace) Close() error {
 		_ = w.hookEng.Close()
 	}
 	return nil
+}
+
+// stopSwarm stops every sub-agent and waits for each to write its last
+// events.
+//
+// 🚨 It ends each session's watch first. The stop of a sub-agent reads as the
+// end of its task, and a batch would then report itself as finished into a
+// session that is about to close. The state file keeps the batch, and the
+// next daemon reports it (workspace_swarm_record.go).
+func (w *Workspace) stopSwarm() {
+	if w.swarm == nil {
+		return
+	}
+	w.mu.Lock()
+	for _, s := range w.sessions {
+		s.stopSwarmWatch()
+	}
+	w.mu.Unlock()
+	w.swarm.StopAllAndWait(0)
 }
 
 // --- path / id helpers ---
@@ -1158,10 +1183,17 @@ func (w *Workspace) attachmentExtras(sessID string, p ctrlproto.PromptParams) co
 	return extras
 }
 
-func (w *Workspace) Queue(ctx context.Context, sess, text string) error {
+func (w *Workspace) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
+	if !ctrlproto.ValidQueueSource(p.Source) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the source of a queued message is not a valid name"))
+	}
 	if s := w.live(sess); s != nil {
-		s.queue(text)
-		w.mirrorUserTyped(s.id, text)
+		s.queueFrom(p.Source, p.Text)
+		// Only what a person typed goes to the bound chat as their words. A
+		// text with a source is a report from another part of the system.
+		if p.Source == "" {
+			w.mirrorUserTyped(s.id, p.Text)
+		}
 	}
 	return nil
 }
@@ -1174,9 +1206,13 @@ func (w *Workspace) mirrorUserTyped(sessID, text string) {
 	}
 }
 
-func (w *Workspace) SetQueue(ctx context.Context, sess string, texts []string) error {
+func (w *Workspace) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
+	entries, known, err := p.Entries()
+	if err != nil {
+		return err
+	}
 	if s := w.live(sess); s != nil {
-		s.setQueue(texts)
+		s.setQueue(entries, known)
 	}
 	return nil
 }

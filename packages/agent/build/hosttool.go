@@ -37,10 +37,11 @@ var hostGateSeq atomic.Uint64
 // upstream — an untrusted project's extensions never load, so a loaded
 // extension is either the user's own or one a trusted project shipped.
 //
-// A guard is the host's own rung, as in BuildToolGate. An extension that
-// runs bash for a model must meet the same refusal as the model's own call.
-func buildHostToolDispatcher(ag *core.Agent, gate *permission.ConfirmGate, mgr hostToolSource, guards ...CallGuard) extdriver.HostToolDispatcher {
-	guards = append([]CallGuard{shellBoundsGuard}, guards...)
+// A rung is the host's own, as in BuildToolGate. An extension that runs bash
+// for a model must meet the same refusal as the model's own call, and its
+// call counts where the model's own call counts.
+func buildHostToolDispatcher(ag *core.Agent, gate *permission.ConfirmGate, mgr hostToolSource, rungs ...Rung) extdriver.HostToolDispatcher {
+	guarded, counted := hostRungs(rungs)
 	return func(ctx context.Context, extName, toolName string, args json.RawMessage, silent bool) ([]extproto.ContentBlock, bool) {
 		errOut := func(msg string) ([]extproto.ContentBlock, bool) {
 			return []extproto.ContentBlock{{Type: "text", Text: msg}}, true
@@ -64,18 +65,20 @@ func buildHostToolDispatcher(ag *core.Agent, gate *permission.ConfirmGate, mgr h
 		// call's, and a borrowed "current call" id would collide in the
 		// confirmer's pending map (the answer reaches one of them, the other
 		// wedges until turn cancel).
-		for _, g := range guards {
-			if g == nil {
-				continue
-			}
-			if why := g(ctx, toolName, args); why != "" {
-				recordGateAudit(auditViaHostToolCall, toolName, args, gate, false, why)
-				return errOut(fmt.Sprintf("host_tool_call: %q denied: %s", toolName, why))
-			}
+		if why := guarded(ctx, toolName, args); why != "" {
+			recordGateAudit(auditViaHostToolCall, toolName, args, gate, false, why)
+			return errOut(fmt.Sprintf("host_tool_call: %q denied: %s", toolName, why))
 		}
 		preview := permission.ToolPreview(tool, args, 120)
 		callID := fmt.Sprintf("hostcall-%s-%d", extName, hostGateSeq.Add(1))
 		allowed, reason, _ := gate.Check(ctx, toolName, args, preview, callID)
+		if allowed {
+			// The host's rung behind the gate, for a call that the gate
+			// allowed. The audit line holds the last word.
+			if why := counted(ctx, toolName, args); why != "" {
+				allowed, reason = false, why
+			}
+		}
 		recordGateAudit(auditViaHostToolCall, toolName, args, gate, allowed, reason)
 		if !allowed {
 			return errOut(fmt.Sprintf("host_tool_call: %q denied: %s", toolName, reason))
@@ -113,7 +116,7 @@ func contentBlocksFromResult(content []provider.Content) []extproto.ContentBlock
 // scripting host-call path (terva_scripting's code_execution — a no-op
 // stub otherwise), which needs the same ag+gate pair but must not depend
 // on an extension manager being present.
-func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate, guards ...CallGuard) {
+func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate, rungs ...Rung) {
 	if ag == nil {
 		return
 	}
@@ -121,5 +124,5 @@ func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *pe
 	if extMgr == nil {
 		return
 	}
-	extMgr.SetHostToolDispatcher(buildHostToolDispatcher(ag, gate, extMgr, guards...))
+	extMgr.SetHostToolDispatcher(buildHostToolDispatcher(ag, gate, extMgr, rungs...))
 }

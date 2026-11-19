@@ -748,9 +748,63 @@ func shellBoundsGuard(_ context.Context, tool string, args json.RawMessage) stri
 	return tools.ShellTooLong
 }
 
+// Rung is a rung that a host adds to the ladder: a CallGuard ahead of it, or
+// an AfterAllow behind it.
+type Rung interface{ hostRung() }
+
 // CallGuard is a rung that a host puts ahead of the ladder. It returns why a
 // call is refused, or an empty text for a call that it has no word on.
 type CallGuard func(ctx context.Context, tool string, args json.RawMessage) string
+
+func (CallGuard) hostRung() {}
+
+// AfterAllow is a rung that a host puts behind the ladder. It runs one time
+// for a call that every other rung allowed, with the arguments that the tool
+// gets. It returns why the call is refused after all, or an empty text.
+//
+// 🔑 A rung that keeps a count stands here. A guard runs again for each
+// rewrite of the arguments, and it runs for a call that a hook, the policy
+// or a person then refuses. A count in a guard would count calls that never
+// ran.
+type AfterAllow func(ctx context.Context, tool string, args json.RawMessage) string
+
+func (AfterAllow) hostRung() {}
+
+// hostRungs sorts a host's rungs into the two places of the ladder. The
+// first guard is shellBoundsGuard, for every host.
+func hostRungs(rungs []Rung) (guarded, counted func(ctx context.Context, tool string, args json.RawMessage) string) {
+	guards := []CallGuard{shellBoundsGuard}
+	var last []AfterAllow
+	for _, r := range rungs {
+		switch r := r.(type) {
+		case CallGuard:
+			if r != nil {
+				guards = append(guards, r)
+			}
+		case AfterAllow:
+			if r != nil {
+				last = append(last, r)
+			}
+		}
+	}
+	guarded = func(ctx context.Context, tool string, args json.RawMessage) string {
+		for _, g := range guards {
+			if why := g(ctx, tool, args); why != "" {
+				return why
+			}
+		}
+		return ""
+	}
+	counted = func(ctx context.Context, tool string, args json.RawMessage) string {
+		for _, a := range last {
+			if why := a(ctx, tool, args); why != "" {
+				return why
+			}
+		}
+		return ""
+	}
+	return guarded, counted
+}
 
 // BuildToolGate composes the tool-call ladder in its canonical order —
 // pre-hooks (may rewrite args; allow/deny are final), the confirm gate
@@ -779,19 +833,11 @@ type CallGuard func(ctx context.Context, tool string, args json.RawMessage) stri
 // final: no hook's allow, no rule and no posture reaches past it. A hook or
 // an extension can rewrite the arguments after a guard read them, so each
 // guard reads a rewrite again.
-func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *extensions.Manager, guards ...CallGuard) core.Gate {
-	guards = append([]CallGuard{shellBoundsGuard}, guards...)
-	guarded := func(ctx context.Context, name string, args json.RawMessage) string {
-		for _, g := range guards {
-			if g == nil {
-				continue
-			}
-			if why := g(ctx, name, args); why != "" {
-				return why
-			}
-		}
-		return ""
-	}
+//
+// An AfterAllow is the host's rung behind all three. It runs one time, for a
+// call that the rest of the ladder allowed, and its refusal is final too.
+func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *extensions.Manager, rungs ...Rung) core.Gate {
+	guarded, counted := hostRungs(rungs)
 	return core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, tool core.Tool) (allowed bool, reason string, modArgs json.RawMessage) {
 		args := call.Arguments
 		// Audit every call with the gate's decision and the mode in force, so
@@ -839,6 +885,7 @@ func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *
 				return false, denyReason, nil
 			}
 		}
+		rewritten := hookModified
 		if extMgr != nil {
 			res := extMgr.InterceptToolCall(ctx, call.ID, call.Name, args)
 			if res.Block {
@@ -849,10 +896,16 @@ func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *
 				if why := guarded(ctx, call.Name, args); why != "" {
 					return false, why, nil
 				}
-				return true, "", args
+				rewritten = true
 			}
 		}
-		if hookModified {
+		// 🚨 Every other rung allowed the call, and args is what the tool
+		// gets. So this is the one place where a host's count is a count of
+		// calls that run.
+		if why := counted(ctx, call.Name, args); why != "" {
+			return false, why, nil
+		}
+		if rewritten {
 			return true, "", args
 		}
 		return true, "", nil

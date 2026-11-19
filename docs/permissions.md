@@ -157,9 +157,31 @@ lets you revoke this session's grants (see below).
 |---|---|
 | `yolo` | every tool call runs without asking. `ask` rules don't prompt here, because yolo never prompts, but `deny` rules still block |
 | `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code. A foreign tool with the `network-read` authority still asks, even though it reads nothing locally. That includes a read-only tool on a remote MCP server, reached directly or through `terva-mcp-bridge` (see below) |
-| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends |
-| `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did) |
+| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends. While routines are on, a talkoot member's two calls to the person, described below the table, do not ask |
+| `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did). While routines are on, a talkoot member's two calls to the person do not ask |
 | `plan` | only read-only tools run, and mutating tools don't even enter the registry, so the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted. The one exception is a talkoot member's `talkoot_send` and `talkoot_handoff`, because a planning member's plan reaches its team as an envelope. Plan does not prompt for them, and your deny and ask rules still apply. An envelope starts the recipient's turn in the recipient's own posture, so a planning member can wake a member that writes. Write an ask rule for the two tools to approve each send |
+
+**While routines are on, two calls of a talkoot member go to the person
+with no approval card.** `talkoot_routines` in your user configuration turns
+routines on, and the foot of the rail in the Talkoot app says so while this
+holds. With routines off, `ask` and `auto-edit` ask for both calls, as they
+did before.
+
+One call is `talkoot_routine`, which only draws the card that you approve.
+The other is a `talkoot_send` whose every recipient is `human` or a
+`human:<name>` address. It writes to you, starts no turn and spends no
+budget. A routine's member works with nobody present, and a card then ends
+the work at its deadline, so such a member could not say what a run found.
+`plan` already ran both calls, so `ask` and `auto-edit` were the stricter
+postures and the looser ones for them.
+
+A `talkoot_send` with a member among its recipients still asks, because it
+starts that member's turn. An `ask` rule or a `deny` rule that you write for
+either tool still decides the call. Write an `ask` rule for `talkoot_send`
+when the team's messages to you leave the machine through a
+[chat bridge](talkoot.md#reach-the-team-from-chat) and you want to read each
+one first. A member whose turn read hostile text can put what it read into
+such a message.
 
 **Defaults differ by run mode.** An interactive session defaults to
 `workspace` (a human is present to answer the foreign-tool prompts) and
@@ -631,6 +653,10 @@ started the rule has no word, and a merge reaches the approval path that every
 other command does. A refusal names `the unattended merge rule` and says what
 the rule found, and the audit log records it.
 
+A turn is yours when you typed into it. A report on sub-agents that terva
+writes into a member's session is no such input. The turn that it begins is
+unattended when the member still works in a chain that a routine began.
+
 The rule refuses a call that does one of these:
 
 | What the call does | Examples |
@@ -743,12 +769,42 @@ a routine that has not ended yet.
 **The rule explains, and the forge account binds.** The rule reads the text of
 a command, so a shell can get past it. A script that the agent wrote passes,
 and so do an alias or a variable that a file sets, and another
-interpreter. The rule also does not reach a swarm child's own session, or the
-shell of a member that another harness runs, such as Claude Code. Its job is
+interpreter. The rule also does not reach the shell of a member that another
+harness runs, such as Claude Code. Its job is
 to tell an agent why the merge is not its to make, at each route that it
 tries. The guard that holds is on the forge. Run the daemon of unattended
 work under a forge account that has no right to merge to trunk, and protect
 trunk there. The rule then covers a mistake, and the account covers the rest.
+
+### A sub-agent of unattended work
+
+A sub-agent that `swarm_spawn` starts is a process with a gate of its own.
+When a turn that no person began starts one, the daemon marks it, and its
+gate then holds the merge rule and
+[the review count](#the-review-count-of-unattended-work). The sub-agent reads
+the merge rule's two keys from your configuration itself. For a review
+request it asks the daemon, so its requests count against the routine of the
+chain that started it, as requests of the member whose turn started it.
+
+The daemon writes the mark from the turn at work. The tool takes no argument
+for it, so an agent cannot set it and cannot clear it.
+
+Four limits follow from how a sub-agent works:
+
+- **The mark lasts for the life of the sub-agent.** A sub-agent outlives the
+  turn that started it. A message that you send it later, from the tasks
+  pane, does not clear the mark. Start a new sub-agent from your own turn
+  when you want one that may merge.
+- **Such a turn cannot start an external worker.** A `backend` names a
+  process with no terva gate, so neither rule can reach it. The tool refuses
+  the call and says so.
+- **A marked sub-agent marks what it starts.** Each agent that its process
+  starts gets the mark, and it starts no external worker either. Such an
+  agent has no daemon to count for it, so each of its review requests is
+  refused.
+- **A sub-agent that cannot reach the daemon asks for no review.** Each
+  request is refused until the daemon counts again. The merge rule still
+  holds, because the sub-agent reads it alone.
 
 ## The review count of unattended work
 
@@ -809,10 +865,11 @@ without a request in it.
 The daemon finds a request with the reader of
 [the unattended merge rule](#the-unattended-merge-rule), so it looks in each
 place where that rule looks. It has the limits of that rule too. A script
-that asks for a review passes with no count. So does a request in a swarm
-child's own session, and one in the shell of a member that another harness
-runs. One request can also start more than one reviewer, as a panel does,
-and it counts as one.
+that asks for a review passes with no count. So does a request in the shell
+of a member that another harness runs. One request can also start more than
+one reviewer, as a panel does, and it counts as one.
+[A sub-agent of unattended work](#a-sub-agent-of-unattended-work) asks under
+the same count.
 
 **The count is no budget.** It bounds an agent that follows its
 instructions, at each request that the daemon can see. It does not bound

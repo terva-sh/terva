@@ -423,7 +423,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args build.Args, r *buil
 	}
 }
 
-func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer, tasksCtrl *tasktool.Controller) {
+func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer, tasksCtrl *tasktool.Controller, rungs ...build.Rung) {
 	if ag == nil {
 		return
 	}
@@ -441,7 +441,11 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	// build.WireHostToolDispatcher has the same shape — it binds the
 	// scripting host call for any agent and returns early only for the
 	// extension-specific half.
-	build.WireHostToolDispatcher(ag, extMgr, gate)
+	//
+	// rungs are the host's own rungs of that ladder. The door of an
+	// extension's host_tool_call takes the list that the caller gave the
+	// gate, so the two cannot differ.
+	build.WireHostToolDispatcher(ag, extMgr, gate, rungs...)
 
 	// The ticket direct-edit warning arms again at every turn boundary. This sits
 	// OUTSIDE the extension gate below on purpose: it has nothing to do with

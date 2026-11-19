@@ -13,10 +13,26 @@ import (
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/provider"
 )
+
+// swarmChildRungs returns the host's rungs for this child's gate. A child
+// that the supervisor marked as work of a chain that no person began gets
+// the two rules of such work, and any other child gets none.
+//
+// 🚨 The mark comes from the supervisor, in the environment. No flag and no
+// part of the task text carries it, so the model that wrote the task cannot
+// set it and cannot clear it. A mark in the environment that the supervisor
+// itself inherited marks the child too, which is the careful reading.
+func swarmChildRungs(inbox, cwd string) []build.Rung {
+	if envcompat.Get(swarm.UnattendedEnv) == "" {
+		return nil
+	}
+	return workspace.UnattendedChildRungs(cwd, inbox)
+}
 
 // runSwarmAgentMode is the daemon-mode entry point used by every
 // swarm-spawned terva subprocess. It's intentionally close in shape to
@@ -61,12 +77,16 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 	defer stopExt()
 
 	hookEng := build.BuildHookEngine(args, r.Trusted)
-	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
+	// A child of work that no person began holds the rules of that work on
+	// its own gate. The gate of a model's call and the door of an
+	// extension's host_tool_call take the same list, as in the daemon.
+	rungs := swarmChildRungs(args.SwarmAgent, r.CWD)
+	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr, rungs...), build.ExtensionFilters(ctx, extMgr)...)
 	// nil differ: swarm sub-agents run concurrently sharing one workspace,
 	// so per-sub-agent diffing would race and double-report; the parent
 	// run's workspace_changed captures the net effect of the whole swarm.
 	// nil task controller: a focused sub-agent doesn't carry its own task board.
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, hookEng, nil, nil)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, hookEng, nil, nil, rungs...)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Stream every message, usage row, compaction, and image exclusion to disk
@@ -120,11 +140,16 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 
 	em := newSwarmEmitter(os.Stdout, logMirror)
 
-	em.emit("agent_ready", map[string]any{
+	ready := map[string]any{
 		"version": version,
 		"cwd":     r.CWD,
 		"model":   r.Model,
-	})
+	}
+	// The event log then says which rules this child worked under.
+	if len(rungs) > 0 {
+		ready["unattended"] = true
+	}
+	em.emit("agent_ready", ready)
 
 	// turnCtx is the per-turn context. We keep a per-process
 	// cancel so the "cancel" inbox message can interrupt an

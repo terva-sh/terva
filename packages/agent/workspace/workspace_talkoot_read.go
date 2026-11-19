@@ -52,6 +52,10 @@ type talkootReads struct {
 	// Either way the final reply no longer answers only the opening delivery,
 	// so launchTurn does not mirror it.
 	users atomic.Uint64
+	// recaps counts the user messages that were a report on sub-agents, and
+	// turnRecaps holds it as it was when the turn at work began. A recap is
+	// input that no person wrote, as a delivery is (deliveredOnly).
+	recaps, turnRecaps atomic.Uint64
 	// replies counts the assistant messages this session's turns appended. A
 	// turn that leaves it unchanged produced no reply of its own, so the last
 	// assistant message in the transcript belongs to an earlier turn and must
@@ -129,8 +133,19 @@ func (r *talkootReads) observe(m provider.Message) {
 	if r.fresh.Swap(false) && len(reads) == 1 && reads[0].person {
 		r.opened.Add(1)
 	}
-	if len(reads) > 0 {
+	switch {
+	case len(reads) > 0:
 		r.taken.Add(uint64(len(reads)))
+	case m.Meta[core.MetaSource] == ctrlproto.QueueSourceSwarmRecap:
+		// 🔑 The label is enough here. A client can queue its own text
+		// under the recap's source, and that only makes a person's turn
+		// read as unattended, which takes authority away and gives none.
+		//
+		// 🚨 One message counts one time. A message that is a delivery
+		// and has the recap's label too must not count twice: the sum
+		// would then pass the count of user messages, and the turn would
+		// read as one that a person typed (deliveredOnly).
+		r.recaps.Add(1)
 	}
 	for _, d := range reads {
 		d.read()

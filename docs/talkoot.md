@@ -163,8 +163,12 @@ the model. External backends keep their own model names and do not receive
 the native catalog.
 
 A member can reply to the person who started its current chain with
-`talkoot_send` to `human:<name>`, `human`, or that person's exact name. Member
-ids take precedence over aliases. A member cannot choose another person, and
+`talkoot_send` to `human:<name>`, `human`, or that person's exact name. A
+member id takes precedence over a person's exact name. No member can have
+the id `human`, so that word always means the person. While routines are
+on, a send whose every recipient is `human` or a `human:<name>` address
+needs no approval card in `ask` and `auto-edit` posture. A member cannot
+choose another person, and
 a handoff still needs a member recipient. Replies to a person stay in the
 room and wake nobody.
 
@@ -206,8 +210,9 @@ your name.
 | `brief` | Times of day at which the bridge sends the updates it held, such as `["07:30", "19:00"]`. Leave it out, and they go out when you next write |
 | `quiet` | A range in which the bridge stays quiet, such as `"22:00-07:00"`. A range whose two ends are the same time is no quiet hours |
 
-The key does nothing while `talkoot_enabled` is off, and the daemon reports
-nothing about it then.
+The key starts no bridge while `talkoot_enabled` is off, or when it names no
+talkoot. The daemon says so on standard error when it starts, and the
+**Chat** pane of the web panel shows the reason.
 
 Set the connector up and pair your account before you turn the bridge on:
 
@@ -277,9 +282,15 @@ only for one of these reasons.
 | **A reply** | You posted in the last 10 minutes, from chat or from the app, so you are in the conversation |
 | **The work finished** | The team stopped working, no member waits on you, and five seconds passed. The newest message of each piece of work goes out as its last word |
 | **A decision** | A roster proposal or a kickoff waits in the app |
+| **A routine paused itself** | A run failed, or the routine passed its daily spend limit. The routine starts no run until you resume it. Only the person who approved the routine gets this |
 | **A watched change** | Something you asked the team to watch changed. Nothing produces this reason yet |
 
 Every other message is an update. The daemon holds it for the brief.
+
+A run that ended at a question that nobody answered also waits for the
+brief. The chat already said that the question closed. The brief then holds
+the question and what the run left undone, for the person who approved the
+routine.
 
 **The brief** is one message that lists the held updates, each with its time
 and its sender. It lists the newest 30 and says how many older ones are in
@@ -292,10 +303,14 @@ brief when it starts, and not one for each time it missed. The brief lists
 what was held. No model writes it.
 
 **Quiet hours** are the range in `quiet`. In that range the daemon holds
-everything except a question and a reply. A question still goes out, because
-a member's turn waits on it, and a question that nobody hears parks the work
-until it expires. A reply goes out because a person who writes at night is
-awake. At the end of the range the daemon sends what it held for a reason,
+everything except a question, a reply, and a routine that paused itself. A
+question still goes out, because a member's turn waits on it, and a question
+that nobody hears parks the work until it expires. A reply goes out because
+a person who writes at night is awake. A routine that paused itself goes out
+because it does nothing at each of its times until you resume it. One
+failure of the network at night is enough to pause a routine, so it is
+enough to wake you. At the end of the range the daemon sends what it held
+for a reason,
 the oldest first. The updates stay for the brief. When you write in quiet
 hours, you also get what was held for a reason.
 
@@ -344,8 +359,11 @@ member that ends its turn never looks again. A **wake** is the third way.
 The member sets one later turn for itself with the `talkoot_wake` tool and
 ends its turn. The daemon starts the later turn when the time comes.
 
-Wakes are off by default. Turn them on in your user configuration,
-`$TERVA_HOME/config.json`:
+Wakes are off by default. Turn them on with **Member wakes** in the
+settings, which is under **Talkoot teams** while that row is on. The row
+sets how many wakes one member may have open at a time. It writes the key to
+your user configuration, `$TERVA_HOME/config.json`, and you can also set the
+key there by hand:
 
 ```json
 {
@@ -373,12 +391,17 @@ on this page. A number in quotes, as in `"per_member": "3"`, is one. The
 whole `config.json` then does not read. terva says so on standard error and
 starts with its defaults, so Talkoot itself is off.
 
-Restart the daemon after you turn wakes on. A member gets the tool when its
-session is built, so a running session does not gain it. A daemon that keeps
-no timers, such as one whose timer file does not open, still gives the tool,
-and the tool then refuses with that reason. Turning wakes off
-needs no restart. The daemon reads the key again each time a member sets a
-wake and each time a wake fires.
+The **Member wakes** row needs no restart. A member has the tool at its next
+turn. The row offers the caps 1, 2, 3 and 5, and it keeps the `max_delay`
+that the key holds. **Off** removes the key, and `max_delay` goes with it.
+
+Restart the daemon after you turn wakes on by hand in `config.json`. A member
+gets the tool when its session is built, so a running session does not gain
+it from an edit of the file. A daemon that keeps no timers, such as one
+whose timer file does not open, still gives the tool, and the tool then
+refuses with that reason. Turning wakes off needs no restart in either way.
+The daemon reads the key again each time a member sets a wake and each time
+a wake fires.
 
 ### What a wake is
 
@@ -413,6 +436,35 @@ when the list names it. A member in `plan` posture keeps it. To approve each
 wake yourself, write an `ask` rule for `talkoot_wake`
 ([permissions.md](permissions.md)).
 
+### A wake of a worker member
+
+A member on the `claude` or the `terva:portable` driver sets a wake with the
+same tool, through the Talkoot MCP bridge. The two caps bound it, it needs a
+chain that you began, and the room and the rail show it as they show a native
+member's.
+
+Three things differ:
+
+- **The woken turn is outside terva's permission gate.** A native member's
+  turn runs under its posture and your rules. A worker's turn runs in its own
+  harness, under that harness's rules, with nobody present. The daemon checks
+  the call that sets the wake, and it does not check what the worker does
+  when the wake fires. To keep one worker from a wake, give its member a
+  `tools` list that does not name `talkoot_wake`. A member with no list has
+  the wake, as a native member does. To keep every member from it, write a
+  `deny` rule for `talkoot_wake`. The daemon applies your rules to a
+  worker's call by the tool's own name.
+- **The wake starts a worker that stopped.** A worker stops when it is idle.
+  The wake is a delivery, so it starts the worker again, as a message does.
+- **The turn cap bounds it.** Each woken turn counts toward the member's
+  `turns_per_day`. Some worker turns report no cost, and then that cap is
+  the one limit on a wake that fires each hour. A wake that comes due at the
+  cap waits in the room.
+
+The worker has the tool in its list whether wakes are on or off, because the
+bridge reads no configuration. While wakes are off, the daemon refuses the
+call and names the key.
+
 ### See a wake, and cancel it
 
 The foot of the rail in the Talkoot app says that wakes are on,
@@ -420,11 +472,14 @@ with the two caps. It lists each open wake with its time, its member and its
 reason. The cancel button beside a wake removes it, and the member gets no
 turn from it.
 
-A wake is open until it comes due. A wake that comes due while its member or
-its chain is paused becomes a message in the room that waits for your resume,
-as a teammate's message does. It then leaves the list of open wakes and the
-member's cap, and the cancel button no longer reaches it. To keep that turn
-from the member, leave the chain paused.
+A wake is open until it reaches its member. A wake that comes due while its
+member or its chain is paused becomes a message in the room that waits for
+your resume, as a teammate's message does. It stays in the list of open
+wakes, with the time that it came due and the words "came due and waits for
+a resume". It still counts toward the member's cap, and the cancel button
+still reaches it. A wake that you cancel there gives the member no turn at
+the resume, and its message stays in the room with the line of your cancel
+after it.
 
 The room records each step. A line says when a member set a wake, when you
 cancelled one, and when one came due and did not fire, with the cause. A
@@ -435,14 +490,15 @@ wake that fires shows as a message that the member sent to itself, marked
 
 | When | What the daemon does |
 |---|---|
-| The daemon was down at the wake's time | The wake fires when the daemon starts, and its text says how late the daemon was |
+| The daemon was down at the wake's time | The wake fires when the daemon starts, and its text says how late it is |
 | You turned wakes off | An open wake does not fire. The room records it as dropped |
 | The member left the roster | The wake is dropped, and the room says so |
-| The member or its chain is paused | The wake comes due and waits in the room as a message. The member reads it when you resume |
+| The member or its chain is paused | The wake comes due and waits in the room as a message. The member reads it when you resume. Until then the rail lists it as a wake that came due and waits, it counts toward the member's cap, and you can cancel it there. A wake that you cancel gives the member no turn at the resume |
 | The chain has no hop left | The chain pauses, as it does for a message past the limit. A wake that comes due waits for your resume, and a new wake is refused |
 | A roster update runs at the wake's time | The daemon tries the wake again each half minute, for up to ten minutes. The wake's text does not call that wait late. After the last try the wake is dropped, and the room says so |
 | `talkoot_enabled` is off | Open wakes wait in the **Timers** pane with the reason, and none fires |
-| This daemon does not run the team at the wake's time | The wake is dropped. Only the daemon's log says so, because no room is open to write |
+| This daemon does not run the team at the wake's time | The wake waits for the team. A team that did not start has its problem in the list of teams, and that text counts the wakes that wait. The wake fires after the start of a daemon that runs the team, and its text says how late it is. You cannot cancel it while it waits |
+| The wake waited 7 days for its team, or the team's roster file is gone | The wake is dropped. Only the daemon's log says so, because no room is open to write |
 
 ## Approve work on a schedule
 
@@ -611,10 +667,14 @@ refused until you decide the first, so a member in a loop cannot fill the
 inbox with the same card.
 
 Only a `native` member has `talkoot_routine`, and a roster's `tools` list
-narrows it as it narrows `talkoot_wake`. A member in `plan` posture keeps
-it, because the tool only asks. A member in `ask` or `auto-edit` posture
-asks you before a call of this tool, as it does before `bash`. You then
-allow the call first, and the routine's card opens after that.
+narrows it as it narrows `talkoot_wake`. A member in every posture calls it
+with no approval card, because the tool only asks. The routine's own card
+is the approval. An `ask` rule or a `deny` rule that you write for
+`talkoot_routine` still decides the call.
+
+While routines are on, a member's message to you alone needs no approval
+card either, in attended work too. The foot of the rail says so.
+[permissions.md](permissions.md#approval-modes) has the rule and its reason.
 
 ### What a run does
 
@@ -632,17 +692,31 @@ with a line that says no person started it.
 The posture decides what a run can do. A member in `plan` posture has no
 `bash`, `write` or `edit`, and neither has its run. A run of a member in
 `ask` or `auto-edit` posture asks you before each command, and that card
-waits as [a question does](#a-question-that-nobody-answers). Such a member
-also asks before it sends you what the run found, because `talkoot_send` is
-a tool that its posture asks about. Give a routine to a member whose
-posture lets the work run with nobody there.
+waits as [a question does](#a-question-that-nobody-answers). **Always
+allow** on the card lets the next run call that command with no card. A
+message to you alone needs no card in any posture while routines are on, so
+the member can always tell you what the run found. A message to another
+member still asks, because it starts that member's turn. Give a routine to a
+member whose posture lets the work run with nobody there.
 
-A run works in its member's directory, and the member's own turn can work
-there at the same time. So can a run of another routine of the same member.
-A member with `workspace: worktree` shares its worktree with its runs. Two
-turns that edit the same files, or that run `git` at one moment, can
-collide. Give a routine work that reads and reports, or give it to a member
-that does no other work in that directory.
+A run works in its member's directory. For a member with a worktree of its
+own, `workspace: worktree` or `either`, the daemon keeps one turn at a time
+in that directory:
+
+| When | What the daemon does |
+|---|---|
+| A time comes while the member is in a turn | That time starts no run. The room says `started no run: developer is at work in its checkout` |
+| A time comes while another run of the member works | That time starts no run, and the room says that another run is still at work |
+| A message for the member arrives while its run works | The message waits. The room records that it is queued, and it goes out after the run's report |
+
+A turn that you type into the member's own session still starts at once. A
+follow-up that comes due while the directory is in use waits and tries
+again. A routine of a busy member therefore skips often. Give a check that
+must not skip to a member that does no other work.
+
+A member in the shared checkout has no such rule. It already works beside
+every other member, and so do its runs. Two turns there that edit the same
+files, or that run `git` at one moment, can collide.
 
 A routine has a daily spend limit of its own, `spend_usd_per_day`. The
 daemon counts what the routine's runs spent today, and it reads that count
@@ -793,8 +867,11 @@ member. Resume the chain when the member's old work in it should continue.
 A run may push its own branch and open a pull request. It cannot merge, and
 it cannot push to a protected branch. The member that reads the run's report
 works under the same rule, for as long as its turn is in the chain that the
-routine began. In work that you started, a merge reaches your approval as
-every other command does.
+routine began. So does a sub-agent that such a turn starts, for as long as
+the sub-agent lives
+([a sub-agent of unattended work](permissions.md#a-sub-agent-of-unattended-work)).
+In work that you started, a merge reaches your approval as every other
+command does.
 
 The daemon refuses the call before your hooks and your rules see it, in
 every posture. The refusal tells the agent what the rule found and to leave
@@ -811,8 +888,8 @@ A model review runs on the forge, and the daemon cannot see what it costs.
 It can count the requests. So a routine has a `reviews_per_day` limit, and
 each review request in work that the routine began counts against it. The
 member that reads a run's report asks under the same count, for as long as
-its turn is in the chain that the routine began. A request in work that you
-started counts nothing.
+its turn is in the chain that the routine began. A sub-agent of such a turn
+asks under it too. A request in work that you started counts nothing.
 
 The daemon knows no review command by itself. Name yours in
 `review_commands`, as in `"^just pr-review\\b"`. The daemon then counts each
@@ -936,7 +1013,7 @@ write it by hand, and the daemon reads it when it starts.
 
 | Key | Meaning |
 |---|---|
-| `id` | The member's address in the room, as in `@developer`. Lower case letters, digits, and dashes |
+| `id` | The member's address in the room, as in `@developer`. Lower case letters, digits, and dashes. Not `human`, which is the word for the person |
 | `role` | `coordinator`, `planner`, or `specialist`. A team has exactly one coordinator |
 | `title` | A display title, such as `Developer` |
 | `persona` | The persona the member speaks as. See [personas.md](personas.md) |
@@ -1020,8 +1097,10 @@ on, it also has `talkoot_wake`
 
 A `claude` or `terva:portable` member reaches the team through the Talkoot
 MCP bridge, which gives it `talkoot_send`, `talkoot_handoff`,
-`talkoot_roster`, `talkoot_propose`, and `ask_user_question`. Its proposal
-waits in the inbox under the member's name, as a native member's does. Each
+`talkoot_roster`, `talkoot_propose`, `talkoot_wake`, and `ask_user_question`.
+Its proposal waits in the inbox under the member's name, as a native
+member's does. Its wake is under the same two caps as a native member's
+([A wake of a worker member](#a-wake-of-a-worker-member)). Each
 call takes the same path as a
 native member's: your hooks, then the policy of the member's posture with
 your rules, and a card in the inbox when the policy asks.
@@ -1032,7 +1111,9 @@ your rules, and a card in the inbox when the policy asks.
   a Claude Code permission mode that is never wider: `plan` to plan mode,
   `auto-edit` to accept-edits mode, and `ask` or `workspace` to the default
   mode, with its questions sent to your inbox. Its `tools` can narrow only to
-  `read`, `write`, `edit`, `bash`, `grep`, and `glob`.
+  `read`, `write`, `edit`, `bash`, `grep`, and `glob`. The list may also
+  name `talkoot_wake`. A member with a list that does not name it sets no
+  wake.
 - A `terva:portable` member receives the same briefing a Claude Code member
   does, and nothing of terva's own context. It cannot narrow its tools, so a
   roster that sets `tools` for it does not load.
@@ -1259,8 +1340,6 @@ capability it needs, and the events a talkoot sends.
 - There is no driver for Codex or for other ACP agents.
 - The guard values and the daily budget period are fixed.
 - A member on another machine cannot join a team.
-- A worker member cannot set a wake. Only a `native` member has
-  `talkoot_wake`.
 - A watcher routine does not run. The daemon stores it and keeps its
   schedule.
 - A routine's review limit counts only the commands that `review_commands`

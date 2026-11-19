@@ -45,6 +45,16 @@ export function limitValue(field: string, value: string): string {
   return value
 }
 
+// reviewLimitNote says whether the daemon keeps the review limit of a
+// routine. It counts a review request only where the user configuration
+// names the commands that ask for one, and a limit that nothing counts must
+// not read as a limit.
+export function reviewLimitNote(counted?: boolean): string {
+  return counted
+    ? t('Each review request in the chain of a routine counts against its review limit, and the request past the limit is refused.')
+    : t('Nothing counts a review request, so the review limit binds nothing. The talkoot_routines.review_commands key names the commands that ask for a review.')
+}
+
 // usdText writes an amount with two decimals, or with every digit it has when
 // two do not hold it. A limit of 5.004 then never reads as 5.00.
 export function usdText(v: number): string {

@@ -49,12 +49,17 @@ type unattendedTurn struct {
 	wait time.Duration
 }
 
-// deliveredOnly reports whether the turn at work read a delivery and took no
-// other message. A turn that a person typed into is attended, whatever chain
+// deliveredOnly reports whether the turn at work took input and none of it
+// from a person. A turn that a person typed into is attended, whatever chain
 // its member holds.
+//
+// 🚨 A report on sub-agents is such input too. A member in a chain that no
+// person began could otherwise start a sub-agent with a small task, and then
+// work with a person's authority in the turn that the report begins
+// (TKT-01M7R5QJ).
 func (r *talkootReads) deliveredOnly() bool {
-	read := r.taken.Load() - r.turnTaken.Load()
-	return read > 0 && r.users.Load()-r.turnUsers.Load() == read
+	fed := r.taken.Load() - r.turnTaken.Load() + r.recaps.Load() - r.turnRecaps.Load()
+	return fed > 0 && r.users.Load()-r.turnUsers.Load() == fed
 }
 
 // unattended reports whether the turn that this session runs is unattended.

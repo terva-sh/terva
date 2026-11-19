@@ -6,7 +6,7 @@ import { AskRequest } from '../interactions/AskRequest'
 import { PermissionRequest } from '../interactions/PermissionRequest'
 import { who } from './RoomLine'
 import { MarkOf, MarksContext, MemberMark } from './MemberMark'
-import { kindName, limitLabel, limitValue, routineText } from './routines'
+import { kindName, limitLabel, limitValue, reviewLimitNote, routineText } from './routines'
 
 // TalkootInbox shows every card that waits for a person: a member's question
 // or approval, a roster proposal, and a new team's kickoff.
@@ -223,8 +223,9 @@ function RoutineCard({
       <div class="talkoot-note">
         {routine.kind === 'watcher'
           ? t('This version keeps the schedule of a watcher and does not run its command yet.')
-          : t('Each run works with no person present, in a session of its own, and ends in a report to its member. A routine that passes its daily spend limit pauses, and a run is stopped when its cost passes that limit. This version does not enforce the review limit yet.')}
+          : t('Each run works with no person present, in a session of its own, and ends in a report to its member. A routine that passes its daily spend limit pauses, and a run is stopped when its cost passes that limit.')}
       </div>
+      {routine.kind !== 'watcher' && <div class={routine.reviews_counted ? 'talkoot-note' : 'talkoot-note authority'}>{reviewLimitNote(routine.reviews_counted)}</div>}
       {/* 🚨 A follow-up is one more run with nobody present. The short list
           above hides a limit that has its default, and a task's default
           allows follow-ups. So the card says the number each time. */}

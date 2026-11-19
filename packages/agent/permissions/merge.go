@@ -49,6 +49,10 @@ type MergeRule struct {
 	// Protected are branch patterns in the form of path.Match, beside the
 	// built-in names and each remote's default branch.
 	Protected []string
+	// hits gathers each text that a pattern of Commands matched. ReviewRule
+	// sets it, to find a command of its own patterns at each place that
+	// this reader looks (review.go). It is nil for the merge rule.
+	hits *[]string
 }
 
 // RepoFacts is what the rule needs from the repository of a call, to read a
@@ -912,6 +916,11 @@ func (r MergeRule) unparsed(text string, l *line, depth int) {
 	if why := loose(text); why != "" {
 		l.find(why)
 	}
+	// 🚨 ((just land 12) ) is two groups for bash, and the parser refuses it.
+	// A person's pattern with an anchor matches no such line as a whole.
+	if r.anywhere(text) {
+		l.find("it matches a merge command of the user configuration")
+	}
 	// 🚨 gi''t pu''sh origin HEAD:main; cat <<EOF: bash warns of the open
 	// here document and runs the push. The quotes hide the words from a
 	// read word by word.
@@ -939,8 +948,37 @@ const tooDeep = "terva cannot read a command inside this many shells. Run the co
 func (r MergeRule) configured(text string) bool {
 	for _, re := range r.Commands {
 		if re != nil && re.MatchString(text) {
+			if r.hits != nil {
+				*r.hits = append(*r.hits, text)
+			}
 			return true
 		}
+	}
+	return false
+}
+
+// maxPatternText bounds the text that anywhere gives a pattern at one word.
+const maxPatternText = 1 << 10
+
+// anywhere reports whether a person's pattern matches at the front of any
+// word of a text, with the quotes removed. It is the read of a line that the
+// rule does not parse, where a word of a command is enough.
+//
+// 🔑 The bound keeps that read near the size of the line. Without it a
+// pattern with no fixed front reads the rest of the line one time for each
+// word, which is the square of the line.
+func (r MergeRule) anywhere(text string) bool {
+	text = quoteMarks.Replace(text)
+	front := true
+	for i := 0; i < len(text); i++ {
+		if strings.IndexByte(" \t\n\r;|&(){}`$<>=!", text[i]) >= 0 {
+			front = true
+			continue
+		}
+		if front && r.configured(text[i:min(len(text), i+maxPatternText)]) {
+			return true
+		}
+		front = false
 	}
 	return false
 }
@@ -1026,6 +1064,12 @@ func (r MergeRule) parse(command string, l *line, depth int) bool {
 	if err != nil {
 		return false
 	}
+	r.read(file, l, depth)
+	return true
+}
+
+// read reads every command of a parsed line into l.
+func (r MergeRule) read(file *syntax.File, l *line, depth int) {
 	rd := &reading{
 		r: r, depth: depth,
 		seen: map[*syntax.BinaryCmd]bool{}, read: map[*syntax.CallExpr]bool{},
@@ -1035,7 +1079,6 @@ func (r MergeRule) parse(command string, l *line, depth int) bool {
 		chains: map[*syntax.Stmt]int{}, inPipe: map[*syntax.Stmt]bool{}, hidden: map[string]bool{},
 	}
 	rd.walk(file, l)
-	return true
 }
 
 // walk reads the commands under one node.

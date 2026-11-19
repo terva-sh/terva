@@ -51,5 +51,5 @@ func (s *wsSession) bindResolvedChannels(r *build.Resolved) {
 // this before it has finished assembling itself; a rebuild passes s.gate, which
 // is the same gate — it outlives every rebuild by design.
 func (s *wsSession) bindAgentChannels(ag *core.Agent, gate *permission.ConfirmGate) {
-	build.WireHostToolDispatcher(ag, s.extMgr, gate)
+	build.WireHostToolDispatcher(ag, s.extMgr, gate, s.rungs()...)
 }

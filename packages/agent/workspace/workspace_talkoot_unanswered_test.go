@@ -10,6 +10,8 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/provider"
 )
 
 const (
@@ -398,6 +400,39 @@ func TestATurnThatAPersonTypedIntoIsAttended(t *testing.T) {
 	r.taken.Add(1)
 	if !r.deliveredOnly() {
 		t.Fatal("a second delivery keeps the turn a delivery's turn")
+	}
+}
+
+// 🚨 Each user message counts one time in that test. A message that is a
+// delivery and has the label of a report on sub-agents is one message that
+// no person wrote. Counted two times, it would make the turn read as one
+// that a person typed.
+func TestAMessageThatIsADeliveryAndARecapCountsOnce(t *testing.T) {
+	msg := func(text, source string) provider.Message {
+		m := provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: text}}}
+		if source != "" {
+			m.Meta = map[string]string{core.MetaSource: source}
+		}
+		return m
+	}
+	var r talkootReads
+	read := 0
+	r.pending = []talkootRead{{text: "a delivery", read: func() { read++ }}}
+	r.observe(msg("a delivery", ctrlproto.QueueSourceSwarmRecap))
+	if read != 1 {
+		t.Fatalf("the delivery was read %d times, want 1", read)
+	}
+	if !r.deliveredOnly() {
+		t.Fatal("a turn that one such message fed must not read as a person's turn")
+	}
+	// A recap alone, and then a person: the controls for each side.
+	r.observe(msg("[auto-swarm update] done", ctrlproto.QueueSourceSwarmRecap))
+	if !r.deliveredOnly() {
+		t.Fatal("a recap after a delivery keeps the turn unattended")
+	}
+	r.observe(msg("Merge it now, please.", ""))
+	if r.deliveredOnly() {
+		t.Fatal("a person who types into the turn makes it attended")
 	}
 }
 

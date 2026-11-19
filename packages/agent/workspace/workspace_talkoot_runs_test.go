@@ -41,6 +41,15 @@ type runScript struct {
 	// memberThen and memberThenArgs make the member call one more tool
 	// after it read that nobody answered its question.
 	memberThen, memberThenArgs string
+	// memberBash holds the arguments of the bash call that a member makes
+	// when it reads a text with memberBashOn in it, one call for each time
+	// that the text arrives.
+	memberBash, memberBashOn string
+	// memberTool, when it is set, is the tool of that call in place of bash.
+	memberTool string
+	// seq holds the commands that a run gives to bash, one after each
+	// result, before its last text.
+	seq []string
 	// others holds each request that is no run's.
 	others []string
 	// bodies holds the request of each run, and offered the tools that the
@@ -80,6 +89,10 @@ func (p *runScript) serve(rw http.ResponseWriter, r *http.Request) {
 	if !strings.Contains(body, runMark) {
 		p.mu.Lock()
 		send, ask, askOn, then, thenArgs := p.send, p.memberAsk, p.memberAskOn, p.memberThen, p.memberThenArgs
+		bash, bashOn, bashTool := p.memberBash, p.memberBashOn, p.memberTool
+		if bashTool == "" {
+			bashTool = "bash"
+		}
 		p.others = append(p.others, body)
 		p.mu.Unlock()
 		if askOn == "" {
@@ -87,6 +100,13 @@ func (p *runScript) serve(rw http.ResponseWriter, r *http.Request) {
 		}
 		noTool := !strings.Contains(body, `"role":"tool"`)
 		switch {
+		case bash != "" && askedSince(body, bashOn):
+			// toolCallProvider makes no call once the request holds a
+			// result, so this call is written here.
+			rw.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(rw, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_b%d\",\"type\":\"function\",\"function\":{\"name\":%q,\"arguments\":%s}}]},\"finish_reason\":null}]}\n\n", strings.Count(body, `"role":"tool"`), bashTool, strconv.Quote(bash))
+			fmt.Fprint(rw, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+			fmt.Fprint(rw, "data: [DONE]\n\n")
 		case send != "" && noTool && strings.Contains(body, reportMark):
 			toolCallProvider("talkoot_send", send)(rw, r)
 		case ask != "" && noTool && strings.Contains(body, askOn):
@@ -126,6 +146,11 @@ func (p *runScript) serve(rw http.ResponseWriter, r *http.Request) {
 	p.onRun = nil
 	reply, fail, hold := p.reply, p.fail, p.hold
 	usage, callName, callArgs, stall, cut, again := p.usage, p.callName, p.callArgs, p.stall, p.cut, p.again
+	if n := strings.Count(body, `"role":"tool"`); n < len(p.seq) {
+		// The next command of the list. The run goes on after each result.
+		b, _ := json.Marshal(map[string]string{"command": p.seq[n]})
+		callName, callArgs, again = "bash", string(b), true
+	}
 	p.mu.Unlock()
 	if onRun != nil {
 		onRun()
@@ -177,6 +202,14 @@ func (p *runScript) serve(rw http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(rw, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
 	spent()
 	fmt.Fprint(rw, "data: [DONE]\n\n")
+}
+
+// askedSince reports whether body holds mark with no tool result after it.
+// A member's session keeps the results of its earlier turns, so "no result
+// in the request" holds for its first call alone.
+func askedSince(body, mark string) bool {
+	i := strings.LastIndex(body, mark)
+	return i >= 0 && !strings.Contains(body[i:], `"role":"tool"`)
 }
 
 func (p *runScript) set(fn func()) {

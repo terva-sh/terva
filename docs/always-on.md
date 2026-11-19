@@ -41,9 +41,10 @@ time for the latest time that passed, and says how late it is.
 A team that sends you every message becomes a log that you stop reading. So
 no member decides when the chat hears a message. The daemon sends one at
 once for a reason only: a member asks you a question, you are in the
-conversation, the work finished, or a decision waits for you. It holds every
-other message for a **brief** at the times you set. In **quiet hours** it
-holds everything except a question and a reply to you.
+conversation, the work finished, a decision waits for you, or a routine
+paused itself. It holds every other message for a **brief** at the times you
+set. In **quiet hours** it holds everything except a question, a reply to
+you, and a routine that paused itself.
 
 ## Work that no person began has less authority
 
@@ -98,8 +99,9 @@ started, what it reported, and why a time started no run.
   that releases your merge token for one merge is not built.
 - **One coordinator for each project.** Mieli on one project knows nothing
   that Mieli on another learned.
-- **A swarm child** of a member has a gate of its own, and the two forge
-  rules do not reach it.
+- **A sub-agent on an external worker** is refused in work that no person
+  began. That process has no terva gate, so the two forge rules cannot reach
+  it. A native sub-agent works under both rules.
 
 ## Where to go next
 

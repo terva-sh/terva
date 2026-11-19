@@ -101,6 +101,14 @@ type SwarmSpawnTool struct {
 	// turn waiting for one.
 	ConfirmUntrusted func(ctx context.Context, preview string) (allow bool, reason string)
 
+	// Unattended, if set, returns the mark for a sub-agent that the turn at
+	// work starts: the chain of that turn, when no person began it. Nil, or
+	// a nil mark, is a sub-agent of attended work.
+	//
+	// 🔑 The host answers it. No argument of the tool reaches the mark, so
+	// a model cannot set it and cannot clear it.
+	Unattended func() *swarm.Unattended
+
 	// AllowBackend gates and validates the `backend` argument — a request to run
 	// the task on a NON-terva agent (see the worker package) instead of a native
 	// sub-agent. The host supplies it: this package cannot import the worker
@@ -315,6 +323,24 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		}
 	}
 
+	// 🚨 A chain that no person began never merges, and each sub-agent of
+	// such a chain holds that rule on its own gate. An external worker is a
+	// process with no terva gate, so no rule would reach it.
+	//
+	// A process that is itself a sub-agent of such a chain has the mark for
+	// all that it does. The swarm holds both rules again at the spawn, and
+	// this check is here for the words that the model reads.
+	var mark *swarm.Unattended
+	if t.Unattended != nil {
+		mark = t.Unattended()
+	}
+	if mark == nil {
+		mark = swarm.ProcessMark()
+	}
+	if mark != nil && backend != "" {
+		return toolErr("swarm_spawn: no person began this chain, and such a chain cannot start an external worker, because terva cannot hold the merge rule in that process. Omit `backend` to spawn a native sub-agent, which works under the same rules as you do."), nil
+	}
+
 	// The deliverable schema becomes the child's deliver_result argument
 	// schema verbatim, so it must parse and be a top-level object (a
 	// provider requirement for tool schemas) BEFORE anything spawns.
@@ -367,6 +393,8 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		Persona:   persona,
 		Backend:   backend,
 		Schema:    schema,
+		// The host's mark, read above. The model's arguments hold none.
+		Unattended: mark,
 	}
 	// Stamp the spawn with the host conversation's session id so the child's
 	// meta.json records which conversation it belongs to and the /swarm

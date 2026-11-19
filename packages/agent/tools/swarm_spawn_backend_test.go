@@ -121,3 +121,94 @@ func resultText(r core.ToolResult) string {
 	}
 	return sb.String()
 }
+
+// 🚨 TKT-01M7R5QJ. A sub-agent of a chain that no person began holds the
+// chain's rules on its own gate. An external worker has no terva gate, so
+// such a chain cannot start one. The host's mark reaches the spawn of a
+// native sub-agent, and no argument of the tool can set it or clear it.
+func TestAnUnattendedTurnMarksItsSubAgentAndStartsNoExternalWorker(t *testing.T) {
+	type spawned struct {
+		backend string
+		mark    *swarm.Unattended
+	}
+	newTool := func(mark func() *swarm.Unattended) (*SwarmSpawnTool, *[]spawned) {
+		var got []spawned
+		f := swarm.New(swarm.Config{
+			Root:     testsupport.TempDir(t),
+			RepoRoot: testsupport.TempDir(t),
+			NewRunner: func(a *swarm.Agent) swarm.Runner {
+				got = append(got, spawned{a.Backend, a.Unattended})
+				return swarm.RunnerFunc(func(context.Context, swarm.Sink) error { return nil })
+			},
+		})
+		t.Cleanup(f.StopAll)
+		return &SwarmSpawnTool{
+			Swarm: f, Enabled: func() bool { return true }, HostProvider: "p", HostModel: "m",
+			AllowBackend: func(string) error { return nil },
+			Unattended:   mark,
+		}, &got
+	}
+	run := func(tool *SwarmSpawnTool, args map[string]any) core.ToolResult {
+		raw, _ := json.Marshal(args)
+		res, err := tool.Execute(context.Background(), raw, nil)
+		if err != nil {
+			return toolErr(err.Error())
+		}
+		return res
+	}
+	chain := swarm.Unattended{Team: "crew", Member: "helm", Chain: "run-1"}
+	lone := func() *swarm.Unattended { c := chain; return &c }
+
+	t.Run("an external worker is refused", func(t *testing.T) {
+		tool, got := newTool(lone)
+		res := run(tool, map[string]any{"task": "merge it", "backend": "claude"})
+		if !res.IsError || !strings.Contains(resultText(res), "no person began this chain") {
+			t.Fatalf("want a refusal that names the chain, got: %s", resultText(res))
+		}
+		if len(*got) != 0 {
+			t.Fatalf("the refused call started %+v", *got)
+		}
+	})
+	t.Run("a native sub-agent gets the host's mark", func(t *testing.T) {
+		tool, got := newTool(lone)
+		// Words that a model might try. The tool reads none of them.
+		res := run(tool, map[string]any{"task": "merge it", "unattended": false, "Unattended": nil, "attended": true})
+		if res.IsError {
+			t.Fatalf("a native spawn must start: %s", resultText(res))
+		}
+		if len(*got) != 1 || (*got)[0].mark == nil || *(*got)[0].mark != chain {
+			t.Fatalf("the sub-agent started as %+v, want the mark %+v", *got, chain)
+		}
+	})
+	t.Run("a process that is itself unattended starts no external worker", func(t *testing.T) {
+		// The host gives no mark, as in a sub-agent's own process. The
+		// supervisor's variable is the mark there.
+		t.Setenv("TERVA_"+swarm.UnattendedEnv, "1")
+		tool, got := newTool(nil)
+		res := run(tool, map[string]any{"task": "merge it", "backend": "claude"})
+		if !res.IsError || !strings.Contains(resultText(res), "no person began this chain") {
+			t.Fatalf("want a refusal that names the chain, got: %s", resultText(res))
+		}
+		if len(*got) != 0 {
+			t.Fatalf("the refused call started %+v", *got)
+		}
+		if res := run(tool, map[string]any{"task": "search it"}); res.IsError {
+			t.Fatalf("a native spawn must start: %s", resultText(res))
+		}
+		if len(*got) != 1 || (*got)[0].mark == nil {
+			t.Fatalf("the sub-agent of an unattended process started as %+v, want a mark", *got)
+		}
+	})
+	t.Run("a turn that a person began marks nothing", func(t *testing.T) {
+		t.Setenv("TERVA_"+swarm.UnattendedEnv, "")
+		for _, mark := range []func() *swarm.Unattended{nil, func() *swarm.Unattended { return nil }} {
+			tool, got := newTool(mark)
+			if res := run(tool, map[string]any{"task": "merge it", "backend": "claude", "unattended": true}); res.IsError {
+				t.Fatalf("an attended spawn on a backend must start: %s", resultText(res))
+			}
+			if len(*got) != 1 || (*got)[0].mark != nil || (*got)[0].backend != "claude" {
+				t.Fatalf("the sub-agent started as %+v, want the backend and no mark", *got)
+			}
+		}
+	})
+}

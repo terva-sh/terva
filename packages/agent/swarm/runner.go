@@ -54,6 +54,25 @@ type execRunner struct {
 	// would litter the user's repo — every agent's Dir points
 	// at it directly.
 	SessionPath string
+
+	// reviews counts the review requests of a child with the mark of
+	// unattended work (WithReviews).
+	reviews func(n int) string
+}
+
+// ExecOption sets one part of the native runner.
+type ExecOption func(*execRunner)
+
+// WithReviews gives the runner the host's count of review requests. The
+// runner asks it for each question on the review socket of a child that
+// has the mark of unattended work. count returns why the requests are
+// refused, in the words the child's model reads, or an empty text when it
+// counted them.
+//
+// A runner with no count serves no socket, and such a child's review
+// requests are each refused.
+func WithReviews(count func(n int) string) ExecOption {
+	return func(r *execRunner) { r.reviews = count }
 }
 
 // NewExecRunner builds the default native runner — the `terva --swarm-agent`
@@ -62,7 +81,13 @@ type execRunner struct {
 // native path for the agents that have no backend, which is every agent unless
 // someone asked otherwise. Without this the host's NewRunner would have to
 // reach for the unexported execRunner it cannot name.
-func NewExecRunner(a *Agent) Runner { return &execRunner{agent: a} }
+func NewExecRunner(a *Agent, opts ...ExecOption) Runner {
+	r := &execRunner{agent: a}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
+}
 
 // IngestEvent is the post-parse bookkeeping every runner shares: append the
 // event to the durable log, mirror it into the in-memory sink, and fan a
@@ -354,6 +379,19 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	// wires the deliver_result tool + contract addendum from it.
 	if len(r.agent.Schema) > 0 {
 		cmd.Env = append(cmd.Env, "TERVA_SWARM_DELIVERABLE_SCHEMA="+string(r.agent.Schema))
+	}
+	// The mark of unattended work goes the same way, and never in a flag
+	// that a model's task text could carry. The socket is open before the
+	// child starts, so its first question finds it.
+	if r.agent.Unattended != nil {
+		cmd.Env = append(cmd.Env, "TERVA_"+UnattendedEnv+"=1")
+		if r.reviews != nil {
+			srv, err := serveReviews(ReviewSocketPath(inboxPath), r.reviews)
+			if err != nil {
+				return fmt.Errorf("swarm: review socket: %w", err)
+			}
+			defer srv.Close()
+		}
 	}
 
 	stdout, err := cmd.StdoutPipe()

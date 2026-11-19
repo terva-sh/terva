@@ -106,6 +106,11 @@ type Agent struct {
 	// SpawnRequest.Tools). Persisted, so a revived worker keeps its limit.
 	Tools []string
 
+	// Unattended, when non-nil, marks an agent that a chain with no person
+	// at its root started (see SpawnRequest.Unattended). Persisted, so an
+	// agent that starts again keeps the rules of that chain.
+	Unattended *Unattended
+
 	// Schema, when non-empty, is the JSON schema the agent's deliverable
 	// must match (the structured-deliverable contract): a native child gets
 	// a deliver_result tool bound to it, a foreign worker gets it rendered

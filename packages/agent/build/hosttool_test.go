@@ -143,7 +143,7 @@ func TestHostToolDispatcherAsksTheHostsGuards(t *testing.T) {
 		return ""
 	}
 	// A nil gate allows every call, so only the guard can refuse here.
-	d := buildHostToolDispatcher(ag, nil, fakeHostToolSource{}, nil, guard)
+	d := buildHostToolDispatcher(ag, nil, fakeHostToolSource{}, nil, CallGuard(guard))
 	content, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"merge it"}`), false)
 	if !isErr || !strings.Contains(content[0].Text, "the guard refuses a merge") {
 		t.Fatalf("the guard's refusal must reach the extension, got isErr=%v %+v", isErr, content)
@@ -155,6 +155,61 @@ func TestHostToolDispatcherAsksTheHostsGuards(t *testing.T) {
 	recs := readAuditLines(t, home)
 	if len(recs) != 2 || recs[0].Decision != "deny" || recs[0].Reason != "the guard refuses a merge" || recs[1].Decision != "allow" {
 		t.Fatalf("the audit log must hold the refusal and then the call: %+v", recs)
+	}
+}
+
+// 🚨 An extension that runs a host tool for a model meets the host's rung
+// behind the gate too. A count that the host keeps there must count the
+// extension's call as it counts the model's own, and the audit log holds the
+// last word on the call.
+func TestHostToolDispatcherRunsTheRungBehindTheGate(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	prev := auditSink
+	auditSink = newAuditLog(home)
+	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
+
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"echo": echoTool{}})
+	left := 1
+	var seen []string
+	after := AfterAllow(func(_ context.Context, tool string, args json.RawMessage) string {
+		seen = append(seen, tool+" "+string(args))
+		if left == 0 {
+			return "no request is left"
+		}
+		left--
+		return ""
+	})
+	guard := CallGuard(func(_ context.Context, _ string, args json.RawMessage) string {
+		if strings.Contains(string(args), "merge") {
+			return "the guard refuses a merge"
+		}
+		return ""
+	})
+	d := buildHostToolDispatcher(ag, nil, fakeHostToolSource{}, after, guard)
+	// A call that the guard refused does not reach the rung behind.
+	if _, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"merge it"}`), false); !isErr || len(seen) != 0 {
+		t.Fatalf("the rung behind must not run for a call that a guard refused: isErr=%v seen=%q", isErr, seen)
+	}
+	if content, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"one"}`), false); isErr || len(seen) != 1 {
+		t.Fatalf("the first call must run and reach the rung one time: %+v seen=%q", content, seen)
+	}
+	content, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"two"}`), false)
+	if !isErr || !strings.Contains(content[0].Text, "no request is left") || len(seen) != 2 {
+		t.Fatalf("the refusal of the rung behind must reach the extension: isErr=%v %+v seen=%q", isErr, content, seen)
+	}
+	// 🚨 A call that the gate refused does not reach it either. Plan mode
+	// refuses a tool that is not read-only.
+	plan := permission.NewPolicyGate(&permission.PermissionPolicy{Mode: permission.ApprovalPlan, ReadOnly: core.NewReadOnlySet("read")}, nil)
+	left = 1
+	d = buildHostToolDispatcher(ag, plan, fakeHostToolSource{}, after)
+	if _, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"three"}`), false); !isErr || len(seen) != 2 || left != 1 {
+		t.Fatalf("the rung behind must not run for a call that the gate refused: isErr=%v seen=%q left=%d", isErr, seen, left)
+	}
+	auditSink.Close()
+	recs := readAuditLines(t, home)
+	if len(recs) != 4 || recs[0].Decision != "deny" || recs[1].Decision != "allow" || recs[2].Decision != "deny" || recs[2].Reason != "no request is left" || recs[3].Decision != "deny" {
+		t.Fatalf("the audit log must hold the last word on each call: %+v", recs)
 	}
 }
 
