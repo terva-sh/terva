@@ -181,7 +181,7 @@ func TestEveryStreamedArgumentBufferIsRepaired(t *testing.T) {
 				if !ok || !isArgumentBuffer(inner.Sel.Name) {
 					return true
 				}
-				if inEventToolArgs(file, call) {
+				if inEventToolArgs(file, call) || inArgumentPrefixCheck(file, call) {
 					return true
 				}
 				checked++
@@ -197,6 +197,25 @@ func TestEveryStreamedArgumentBufferIsRepaired(t *testing.T) {
 		t.Fatal("census matched no argument buffers at all — the shape it scans for moved, so this guard is now vacuous")
 	}
 	t.Logf("checked %d streamed argument buffer(s)", checked)
+}
+
+// A prefix predicate compares streamed bytes without turning them into JSON.
+func inArgumentPrefixCheck(file *ast.File, call *ast.CallExpr) bool {
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		outer, ok := n.(*ast.CallExpr)
+		if !ok || len(outer.Args) != 2 || outer.Args[1] != call {
+			return true
+		}
+		sel, ok := outer.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HasPrefix" {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		found = ok && pkg.Name == "strings"
+		return !found
+	})
+	return found
 }
 
 // inEventToolArgs reports whether call sits inside an EventToolArgs literal —

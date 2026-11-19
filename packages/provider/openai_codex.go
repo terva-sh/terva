@@ -950,18 +950,38 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 	// item is either a "message" (text) or a "function_call". We track
 	// the in-flight item by its index.
 	type itemState struct {
-		kind      string // "message" | "function_call" | "reasoning" | "image"
-		callID    string
-		name      string
-		argsBuf   strings.Builder
-		textBuf   strings.Builder
-		summary   strings.Builder
-		rawID     string
-		encrypted string
-		announced bool
-		imgData   []byte // decoded image bytes (kind == "image")
-		imgMime   string
-		imgID     string // the "ig_…" image_generation_call id, for later edit replay
+		kind         string // "message" | "function_call" | "reasoning" | "image"
+		callID       string
+		name         string
+		argsBuf      strings.Builder
+		argsFinal    bool
+		argsDiverged bool
+		ended        bool
+		textBuf      strings.Builder
+		summary      strings.Builder
+		rawID        string
+		encrypted    string
+		announced    bool
+		imgData      []byte // decoded image bytes (kind == "image")
+		imgMime      string
+		imgID        string // the "ig_…" image_generation_call id, for later edit replay
+	}
+	finalizeArgs := func(it *itemState, args string) {
+		// A snapshot can repair missing deltas. Only an extension of the
+		// streamed prefix can also travel as an append-only argument event.
+		if !it.argsDiverged {
+			if n := it.argsBuf.Len(); strings.HasPrefix(args, it.argsBuf.String()) {
+				if len(args) > n {
+					out <- EventToolArgs{ID: it.callID, Delta: args[n:]}
+				}
+			} else {
+				// Later snapshots cannot use replaced bytes as an emitted prefix.
+				it.argsDiverged = true
+			}
+		}
+		it.argsBuf.Reset()
+		it.argsBuf.WriteString(args)
+		it.argsFinal = true
 	}
 	var (
 		items    = map[int]*itemState{}
@@ -1133,19 +1153,31 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					Delta       string `json:"delta"`
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
-				if it, ok := items[p.OutputIndex]; ok && it.kind == "function_call" {
+				if it, ok := items[p.OutputIndex]; ok && it.kind == "function_call" && !it.argsFinal && !it.ended {
 					it.argsBuf.WriteString(p.Delta)
 					out <- EventToolArgs{ID: it.callID, Delta: p.Delta}
+				}
+			case "response.function_call_arguments.done":
+				var p struct {
+					OutputIndex int     `json:"output_index"`
+					Arguments   *string `json:"arguments"`
+				}
+				if err := json.Unmarshal([]byte(ev.Data), &p); err != nil {
+					continue
+				}
+				if it, ok := items[p.OutputIndex]; ok && it.kind == "function_call" && !it.ended && p.Arguments != nil {
+					finalizeArgs(it, *p.Arguments)
 				}
 			case "response.output_item.done":
 				var p struct {
 					OutputIndex int `json:"output_index"`
 					Item        struct {
-						Type             string `json:"type"`
-						ID               string `json:"id"`
-						EncryptedContent string `json:"encrypted_content"`
-						Result           string `json:"result"`        // image_generation_call: base64 image
-						OutputFormat     string `json:"output_format"` // image_generation_call: "png" | "jpeg" | "webp"
+						Type             string  `json:"type"`
+						ID               string  `json:"id"`
+						Arguments        *string `json:"arguments"`
+						EncryptedContent string  `json:"encrypted_content"`
+						Result           string  `json:"result"`        // image_generation_call: base64 image
+						OutputFormat     string  `json:"output_format"` // image_generation_call: "png" | "jpeg" | "webp"
 						Summary          []struct {
 							Type string `json:"type"`
 							Text string `json:"text"`
@@ -1156,7 +1188,13 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				if it, ok := items[p.OutputIndex]; ok {
 					switch it.kind {
 					case "function_call":
-						out <- EventToolEnd{ID: it.callID}
+						if !it.ended {
+							if p.Item.Arguments != nil {
+								finalizeArgs(it, *p.Item.Arguments)
+							}
+							it.ended = true
+							out <- EventToolEnd{ID: it.callID}
+						}
 					case "image":
 						if p.Item.Result != "" {
 							if data, derr := base64.StdEncoding.DecodeString(p.Item.Result); derr == nil && len(data) > 0 {

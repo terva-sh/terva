@@ -249,10 +249,10 @@ func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultC
 	}
 	var page struct {
 		Data []struct {
-			ID            string `json:"id"`
-			MaxModelLen   int    `json:"max_model_len"`  // vLLM
-			ContextLength int    `json:"context_length"` // some gateways
-			ContextWindow int    `json:"context_window"` // some gateways
+			ID            string          `json:"id"`
+			MaxModelLen   json.RawMessage `json:"max_model_len"`  // vLLM
+			ContextLength json.RawMessage `json:"context_length"` // some gateways
+			ContextWindow json.RawMessage `json:"context_window"` // some gateways
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &page); err != nil {
@@ -264,9 +264,10 @@ func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultC
 			continue
 		}
 		ctxWin := defaultCtx
-		for _, hint := range []int{d.MaxModelLen, d.ContextLength, d.ContextWindow} {
-			if hint > 0 {
-				ctxWin = hint
+		for _, hint := range []json.RawMessage{d.MaxModelLen, d.ContextLength, d.ContextWindow} {
+			var n int
+			if json.Unmarshal(hint, &n) == nil && n > 0 {
+				ctxWin = n
 				break
 			}
 		}
