@@ -36,6 +36,7 @@
   "%s (system guidance)": "%s (system guidance)",
   "%s (this session)": "%s (this session)",
   "%s / %s tokens (%.1f%% of window), as of the last turn": "%s / %s tokens (%.1f%% of window), as of the last turn",
+  "%s clipboard image exceeds %d bytes": "%s clipboard image exceeds %d bytes",
   "%s connected": "%s connected",
   "%s doesn't offer usage resets.": "%s doesn't offer usage resets.",
   "%s doesn't report usage limits.": "%s doesn't report usage limits.",

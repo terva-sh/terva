@@ -4,11 +4,14 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/i18n"
 )
@@ -78,19 +81,72 @@ func isWSL() bool {
 	return strings.Contains(strings.ToLower(string(b)), "microsoft")
 }
 
-// runClipboardImageCmd runs a native-Linux clipboard reader that writes raw
-// PNG bytes to stdout. A missing binary is an actionable error; any other
-// non-zero exit means "no image of that type on the clipboard" (wl-paste and
-// xclip both exit non-zero when the requested target isn't available).
+const maxNativeClipboardImageBytes = 32 << 20
+
+// runClipboardImageCmd reads PNG bytes without hiding backend failures.
 func runClipboardImageCmd(name string, args ...string) ([]byte, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return runClipboardImageCmdContext(ctx, name, args...)
+}
+
+func runClipboardImageCmdContext(ctx context.Context, name string, args ...string) ([]byte, bool, error) {
 	if _, err := exec.LookPath(name); err != nil {
 		return nil, false, i18n.Errorf("%s not found — install it to paste clipboard images", name)
 	}
-	out, err := exec.Command(name, args...).Output()
-	if err != nil || len(out) == 0 {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 100 * time.Millisecond
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
+	stdout := clipboardCapture{limit: maxNativeClipboardImageBytes}
+	stderr := clipboardCapture{limit: 4096}
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return nil, false, fmt.Errorf("%s: %w", name, ctx.Err())
+	}
+	if stdout.overflow {
+		return nil, false, i18n.Errorf("%s clipboard image exceeds %d bytes", name, maxNativeClipboardImageBytes)
+	}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && !stderr.overflow && nativeClipboardHasNoImage(name, stderr.buf.String()) {
+			return nil, false, nil
+		}
+		if diagnostic := clipSnippet(stderr.buf.String()); diagnostic != "" {
+			return nil, false, fmt.Errorf("%s: %s: %w", name, diagnostic, err)
+		}
+		return nil, false, fmt.Errorf("%s: %w", name, err)
+	}
+	if stdout.buf.Len() == 0 {
 		return nil, false, nil
 	}
-	return out, true, nil
+	return stdout.buf.Bytes(), true, nil
+}
+
+// The capture drains excess bytes so the child cannot block on a full pipe.
+type clipboardCapture struct {
+	buf      bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (b *clipboardCapture) Write(p []byte) (int, error) {
+	n := len(p)
+	keep := min(n, b.limit-b.buf.Len())
+	_, _ = b.buf.Write(p[:keep])
+	b.overflow = b.overflow || keep < n
+	return n, nil
+}
+
+func nativeClipboardHasNoImage(name, diagnostic string) bool {
+	diagnostic = strings.Join(strings.Fields(diagnostic), " ")
+	switch name {
+	case "wl-paste":
+		return diagnostic == "Nothing is copied" || diagnostic == `Clipboard content is not available as requested type "image/png" Use "wl-paste --list-types" to view available types.`
+	case "xclip":
+		return diagnostic == "Error: target image/png not available"
+	}
+	return false
 }
 
 // clipboardNoImageSentinel is what the reader script prints when the Windows

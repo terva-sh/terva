@@ -241,6 +241,16 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		i.inputHistoryIndex = -1
 	}
 
+	if k.Kind == tui.KeyPaste {
+		draft := strings.TrimLeft(i.ed.Value(), " \t")
+		if strings.HasPrefix(draft, "!") || (draft == "" && strings.HasPrefix(strings.TrimLeft(k.Paste, " \t"), "!")) {
+			// Shell text must retain quoting and expansion syntax. The chat
+			// editor's attachment heuristics would quote pasted paths.
+			i.ed.Insert(k.Paste)
+			return false
+		}
+	}
+
 	if submit := i.ed.HandleKey(k); submit {
 		// SubmitValue() expands any [pasted text #N +L lines]
 		// placeholders back into their bodies; the raw Value()
