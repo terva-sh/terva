@@ -35,6 +35,10 @@ const (
 	// it (Router.Introduce), and it wakes the member and roots a chain, as a
 	// post does. A member cannot send one.
 	KindIntro Kind = "intro"
+	// KindWake is a follow-up that a member set for itself, come due
+	// (wake.go). The router alone writes one (Router.FireWake), from the
+	// member to the member, and it wakes the member.
+	KindWake Kind = "wake"
 )
 
 // wakes reports whether an envelope of this kind starts a turn.
@@ -50,6 +54,21 @@ var refKinds = []string{"ticket", "path", "note", "branch", "commit", "url", "an
 // HumanPrefix marks a sender that is a person rather than a member. A member
 // id cannot carry it, because idPattern admits no colon.
 const HumanPrefix = "human:"
+
+// PersonWord is the recipient that stands for the person at a chain's root.
+// A member cannot have it as an id: Roster.Validate refuses it.
+const PersonWord = "human"
+
+// AddressesPerson reports whether a recipient can only be a person: the
+// word, or an address with HumanPrefix.
+//
+// 🔑 The permission gate asks this before a router has the envelope, with no
+// roster to read. So the answer must hold for every roster. A person's bare
+// name is not one of these, because a member can have the same text as its
+// id, and a member id wins.
+func AddressesPerson(to string) bool {
+	return to == PersonWord || strings.HasPrefix(to, HumanPrefix)
+}
 
 // RecruiterPrefix marks a proposal from a recruiter session: a native session
 // bound to the talkoot that holds no seat, such as one running Hautoja. It is
@@ -235,6 +254,12 @@ func (r Roster) coordinator() Member {
 // quote came from the router, so a teammate's body cannot print a line that
 // reads as a person's header or drop the no-approval line.
 func render(r Roster, e Envelope) string {
+	if e.Kind == KindWake {
+		return renderWake(r, e)
+	}
+	if IsRoutineActor(e.From) {
+		return renderReport(r, e)
+	}
 	var b strings.Builder
 	var sender string
 	if m, ok := r.member(e.From); ok {
@@ -353,4 +378,33 @@ func newID(now time.Time) string {
 	}
 	out[0] = alphabet[acc&31]
 	return string(out)
+}
+
+// renderWake writes a wake as its member reads it. It is short on purpose:
+// decision 0029 rule 9 makes a wake a pointer, because the size and the
+// frequency of injected text set the cost (decision 0010).
+//
+// 🔑 The first line says that the member set it, and the last says that no
+// person sent it. A model that reads a wake as a new request from the person
+// answers the person, and nobody asked.
+func renderWake(r Roster, e Envelope) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[talkoot %s] wake that you set, hop %d, envelope %s\n", r.ID, e.Chain.Hops, e.ID)
+	// The first line is the member's reason, and it is quoted. The router
+	// may add one line of its own, the late notice, and that line is not the
+	// member's words. Any other line stays inside the quote.
+	var notice string
+	for i, line := range splitLines(strings.TrimSpace(e.Body)) {
+		if i == 1 && strings.HasPrefix(line, lateNotice) {
+			notice = line
+			continue
+		}
+		b.WriteString("> " + line + "\n")
+	}
+	if notice != "" {
+		b.WriteString(notice + "\n")
+	}
+	b.WriteString("terva sent this at the time you asked for, and no person did. The quoted line is the reason you gave. " +
+		"Read what you need now, then continue the work or report with talkoot_send.")
+	return b.String()
 }

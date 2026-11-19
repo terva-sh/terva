@@ -261,6 +261,12 @@ func (r *recorder) RestoreSession(_ context.Context, p RestoreSessionParams) (Se
 	return SessionInfo{}, nil
 }
 
+// --- TimersController ---
+func (r *recorder) TimerList(_ context.Context) (TimersResult, error) {
+	r.note("TimerList", "", nil)
+	return TimersResult{}, nil
+}
+
 // --- WorkflowsController ---
 func (r *recorder) WorkflowRuns(_ context.Context) ([]WorkflowRunInfo, error) {
 	r.note("WorkflowRuns", "", nil)
@@ -379,6 +385,14 @@ func (r *recorder) DiscardTalkootDraft(_ context.Context, p TalkootRef) error {
 func (r *recorder) ResumeTalkoot(_ context.Context, p TalkootResumeParams) error {
 	r.note("ResumeTalkoot", "", p)
 	return nil
+}
+func (r *recorder) CancelTalkootWake(_ context.Context, p TalkootWakeCancelParams) error {
+	r.note("CancelTalkootWake", "", p)
+	return nil
+}
+func (r *recorder) SetTalkootRoutine(_ context.Context, p TalkootRoutineSetParams) (TalkootRoutines, error) {
+	r.note("SetTalkootRoutine", "", p)
+	return TalkootRoutines{}, nil
 }
 
 // --- SharedFilesController ---
@@ -784,6 +798,8 @@ func dispatchCases() []dispatchCase {
 		{MethodWorkflowsList, nil, "WorkflowRuns", nil},
 		{MethodWorkflowsGet, WorkflowGetParams{ID: "wf_abc123"}, "WorkflowRun", WorkflowGetParams{ID: "wf_abc123"}},
 
+		{MethodTimersList, nil, "TimerList", nil},
+
 		// --- talkoot: eight verbs on one controller, and the id rides params
 		// rather than the frame's sess. The four pairs with the same shape are
 		// where a swapped arm would hide. ---
@@ -807,6 +823,8 @@ func dispatchCases() []dispatchCase {
 		{MethodTalkootPost, TalkootPostParams{ID: "crew", By: "drew", Body: "go"}, "PostTalkoot", TalkootPostParams{ID: "crew", By: "drew", Body: "go"}},
 		{MethodTalkootPause, TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}, "PauseTalkoot", TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}},
 		{MethodTalkootResume, TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}, "ResumeTalkoot", TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}},
+		{MethodTalkootWakeCancel, TalkootWakeCancelParams{ID: "crew", By: "drew", Wake: "01W"}, "CancelTalkootWake", TalkootWakeCancelParams{ID: "crew", By: "drew", Wake: "01W"}},
+		{MethodTalkootRoutineSet, TalkootRoutineSetParams{ID: "crew", By: "drew", Routine: "01R", Action: "pause", Reason: "too noisy"}, "SetTalkootRoutine", TalkootRoutineSetParams{ID: "crew", By: "drew", Routine: "01R", Action: "pause", Reason: "too noisy"}},
 		{MethodTalkootRecruit, TalkootRecruitParams{ID: "crew", Persona: "hautoja"}, "RecruitTalkoot", TalkootRecruitParams{ID: "crew", Persona: "hautoja"}},
 		{MethodTalkootManager, nil, "ManagerTalkoot", nil},
 		{MethodTalkootDrafts, nil, "TalkootDrafts", nil},

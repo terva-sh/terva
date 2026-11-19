@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -61,7 +62,25 @@ type talkootRun struct {
 	// save, so concurrent proposers cannot pass the cap together. It is
 	// taken before mu, and nothing that holds update or mu waits for it.
 	propose sync.Mutex
-	closed  bool
+	// routineMu holds one change to a routine's record from its read to its
+	// last write: an approval, a pause, a resume, a delete, the start of a
+	// run, and the pause after a failed run. A person's verb takes it after
+	// update. A firing and the end of a run take it alone, because a turn
+	// that ends must not wait for a roster update. Nothing that holds it
+	// waits for update.
+	routineMu sync.Mutex
+	// watching holds the cancel of each watcher's check that is at work, by
+	// routine id. watchStopped is set when the team closes, and no check
+	// starts after it. Guarded by watchMu, which is a leaf.
+	watchMu      sync.Mutex
+	watching     map[string]context.CancelFunc
+	watchStopped bool
+	// marks holds what the room says about each routine, by routine id
+	// (routineMark). Guarded by markMu, which is a leaf: observe takes it
+	// with the room locked.
+	markMu sync.Mutex
+	marks  map[string]*routineMark
+	closed bool
 	// stopping is set when shutdown stops the router. An update then refuses,
 	// so it cannot swap in a router that was never stopped.
 	stopping bool
@@ -202,7 +221,8 @@ type talkootRun struct {
 // talkootEvent is a change a client of the talkoot wants to see.
 type talkootEvent struct {
 	Talkoot string
-	// Kind is envelope, status, roster, inbox, beat, or loaded.
+	// Kind is envelope, intro, answer, wake, status, roster, inbox, beat, or
+	// loaded.
 	Kind   string
 	Line   *talkoot.Line
 	Status []talkoot.Status
@@ -254,6 +274,7 @@ func (r *talkootRun) tryDo(fn func(*talkoot.Router) error) bool {
 // reads the faces under the same lock as it takes the queue, so a status never
 // shows a reaction to a line that a later flush sends.
 func (r *talkootRun) observe(l talkoot.Line) {
+	r.noteRoutine(l)
 	r.evMu.Lock()
 	defer r.evMu.Unlock()
 	if r.face != nil {
@@ -281,6 +302,10 @@ func (r *talkootRun) flush() {
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "intro", Line: &lines[i]})
 		case talkoot.LineAnswer:
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "answer", Line: &lines[i]})
+		case talkoot.LineWake:
+			r.emit(talkootEvent{Talkoot: r.id, Kind: "wake", Line: &lines[i]})
+		case talkoot.LineRoutine:
+			r.emit(talkootEvent{Talkoot: r.id, Kind: "routine", Line: &lines[i]})
 		case talkoot.LineRoster:
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "roster", Line: &lines[i]})
 		}
@@ -340,6 +365,13 @@ func (w *Workspace) LoadTalkoots() {
 			w.diagf("talkoot %s did not start: %v", id, err)
 		}
 	}
+	// A wake fires into a team, so its handler waits until the teams run.
+	w.talkoot.loaded.Store(true)
+	w.attachWakeTimers(w.Timers())
+	// The routines need the same two parts. An active routine with no timer
+	// gets one now.
+	w.attachRoutineTimers(w.Timers())
+	w.syncRoutineTimers(w.Timers())
 }
 
 var errNotHomedHere = errors.New("talkoot: homed in another directory")
@@ -414,6 +446,9 @@ func (w *Workspace) startTalkoot(id string) error {
 	// lock, and no router exists yet.
 	run.startFace(lines, w.talkootFaceRows)
 	for _, l := range lines {
+		// What the room says about each routine, for the same reason: the
+		// marks read every line before the run observes one.
+		run.noteRoutine(l)
 		if l.Type != talkoot.LineSeat {
 			continue
 		}
@@ -449,6 +484,11 @@ func (w *Workspace) startTalkoot(id string) error {
 		if l.Type == talkoot.LineSeat && l.Ref != "" {
 			w.talkoot.markMemberLocked(l.Ref)
 		}
+		// The session of a routine's run is a member's too. Its root names
+		// it, and it gets no seat back: a run does not outlive its daemon.
+		if sid, ok := runSessionOf(l); ok {
+			w.talkoot.markMemberLocked(sid)
+		}
 	}
 	// A seat is bound without waking its session. The session materializes on
 	// its next delivery, or when a person opens it, and its build finds the
@@ -470,6 +510,7 @@ func (w *Workspace) startTalkoot(id string) error {
 		}
 	}
 	w.retryMemberReleases(run, seated)
+	w.endLeftRuns(run)
 
 	w.talkootEmit(talkootEvent{Talkoot: id, Kind: "loaded"})
 	w.BroadcastAll(ctrlproto.TalkootsChangedEvent())
@@ -791,6 +832,9 @@ func (w *Workspace) foldTalkootMembers() {
 			if l.Type == talkoot.LineSeat && l.Ref != "" {
 				w.talkoot.markMemberLocked(l.Ref)
 			}
+			if sid, ok := runSessionOf(l); ok {
+				w.talkoot.markMemberLocked(sid)
+			}
 		}
 		if w.talkoot.folded == nil {
 			w.talkoot.folded = map[string]int64{}
@@ -844,6 +888,8 @@ func (w *Workspace) stopTalkoots() {
 	}
 	w.talkoot.mu.Unlock()
 	for _, r := range runs {
+		// No watcher's command outlives its team.
+		r.stopWatchers()
 		r.mu.Lock()
 		r.stopping = true
 		if !r.closed {
@@ -886,6 +932,7 @@ func (w *Workspace) closeTalkoots() {
 		b.revoke()
 	}
 	for _, r := range runs {
+		r.stopWatchers()
 		r.mu.Lock()
 		if !r.closed {
 			w.talkoot.mu.Lock()
@@ -898,6 +945,7 @@ func (w *Workspace) closeTalkoots() {
 					}
 				}
 			}
+			w.endUnopenedRunsLocked(r)
 		}
 		r.closed = true
 		r.mu.Unlock()

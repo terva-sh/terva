@@ -181,6 +181,28 @@ func (w *Workspace) ResumeTalkoot(ctx context.Context, p ctrlproto.TalkootResume
 	return talkootWireErr(w.talkootResume(ctx, p.ID, p.By, p.Member, p.Chain), ctrlproto.CodeBadRequest)
 }
 
+func (w *Workspace) CancelTalkootWake(ctx context.Context, p ctrlproto.TalkootWakeCancelParams) error {
+	err := w.talkootWakeCancel(ctx, p.ID, p.By, p.Wake)
+	if errors.Is(err, talkoot.ErrWakeGone) {
+		return ctrlproto.Wrap(ctrlproto.CodeNotFound, err)
+	}
+	return talkootWireErr(err, ctrlproto.CodeBadRequest)
+}
+
+func (w *Workspace) SetTalkootRoutine(ctx context.Context, p ctrlproto.TalkootRoutineSetParams) (ctrlproto.TalkootRoutines, error) {
+	err := w.talkootRoutineSet(ctx, p.ID, p.By, p.Routine, p.Action, p.Reason)
+	if errors.Is(err, talkoot.ErrNoRoutine) {
+		return ctrlproto.TalkootRoutines{}, ctrlproto.Wrap(ctrlproto.CodeNotFound, err)
+	}
+	if err != nil {
+		return ctrlproto.TalkootRoutines{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
+	}
+	if v := w.talkootRoutinesView(p.ID); v != nil {
+		return *v, nil
+	}
+	return ctrlproto.TalkootRoutines{}, nil
+}
+
 // RecruitTalkoot creates a recruiter session through CreateSession, which
 // runs the recruiter checks. It is the only door the wire has to one.
 func (w *Workspace) RecruitTalkoot(ctx context.Context, p ctrlproto.TalkootRecruitParams) (ctrlproto.SessionInfo, error) {
@@ -223,7 +245,7 @@ func (w *Workspace) TalkootProposals(ctx context.Context, p ctrlproto.TalkootPro
 }
 
 func (w *Workspace) DecideTalkoot(ctx context.Context, p ctrlproto.TalkootDecideParams) (ctrlproto.TalkootProposal, error) {
-	out, err := w.talkootDecide(ctx, p.ID, p.By, p.Proposal, p.Decision, wireOps(p.Ops), p.Reason)
+	out, err := w.talkootDecide(ctx, p.ID, p.By, p.Proposal, p.Decision, wireOps(p.Ops), p.Reason, p.Digest)
 	if err != nil {
 		return ctrlproto.TalkootProposal{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
 	}
@@ -267,6 +289,8 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 	if st, ok := w.chatTeamView(r.ID); ok {
 		out.Chat = &st
 	}
+	out.Wakes = w.talkootWakesView(r.ID)
+	out.Routines = w.talkootRoutinesView(r.ID)
 	members := make([]talkoot.Member, 0, len(v.Members))
 	statuses := make([]talkoot.Status, 0, len(v.Members))
 	for _, m := range v.Members {
@@ -377,7 +401,7 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 		Guard: l.Guard, Action: l.Action, Reason: l.Reason, By: l.By, SpendUSD: l.SpendUSD,
 		Ref: l.Ref, Notes: l.Notes, Proposal: l.Proposal, Proposer: l.Proposer, Edited: l.Edited,
 		Text: l.Text, Tool: l.Tool, Attempt: l.Attempt, Card: l.Card, Outcome: l.Outcome,
-		ColorBefore: l.ColorBefore, ColorAfter: l.ColorAfter,
+		ColorBefore: l.ColorBefore, ColorAfter: l.ColorAfter, Due: l.Due,
 	}
 	if len(l.Changes) > 0 {
 		out.Changes = wireChanges(l.Changes)
@@ -389,6 +413,10 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 	if l.Envelope != nil {
 		e := wireTalkootEnvelope(*l.Envelope)
 		out.Envelope = &e
+	}
+	if l.Routine != nil {
+		r := wireRoutine(*l.Routine)
+		out.Routine = &r
 	}
 	return out
 }
@@ -408,6 +436,14 @@ func wireTalkootEvent(ev talkootEvent) (ctrlproto.Event, bool) {
 	case "answer":
 		if ev.Line != nil {
 			return ctrlproto.TalkootAnswerEvent(ev.Talkoot, wireTalkootLine(*ev.Line)), true
+		}
+	case "wake":
+		if ev.Line != nil {
+			return ctrlproto.TalkootWakeEvent(ev.Talkoot, wireTalkootLine(*ev.Line)), true
+		}
+	case "routine":
+		if ev.Line != nil {
+			return ctrlproto.TalkootRoutineEvent(ev.Talkoot, wireTalkootLine(*ev.Line)), true
 		}
 	case "roster":
 		if ev.Line != nil {

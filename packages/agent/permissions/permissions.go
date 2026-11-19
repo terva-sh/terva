@@ -198,6 +198,14 @@ var planKeeps = map[string]bool{
 	// Outside the worktree the member runs in plan, so without this it could
 	// never enter.
 	"talkoot_workspace": true,
+	// talkoot_wake plans one later turn of the member itself, in its own
+	// posture, so a planning member that waits on a result may set one. The
+	// person's talkoot_wakes caps bound it, and a deny or ask rule stops it.
+	"talkoot_wake": true,
+	// talkoot_routine writes a proposal, as talkoot_propose does. Only a
+	// person's approval stores the routine, so a planning member may ask.
+	// memberAskKeeps gives ask and auto-edit the same answer for it.
+	"talkoot_routine": true,
 }
 
 // builtin names the first-party tools workspace mode trusts (alongside
@@ -240,6 +248,8 @@ var builtin = map[string]bool{
 	"talkoot_note_read":  true,
 	"talkoot_propose":    true,
 	"talkoot_workspace":  true,
+	"talkoot_wake":       true,
+	"talkoot_routine":    true,
 	"share_file":         true,
 	"ask_user_question":  true,
 	"worktree_list":      true,
@@ -833,6 +843,9 @@ func policyFromConfig(p Inputs, cfg config.Config) (*permission.PermissionPolicy
 		return nil, warns, projErr
 	}
 	pol := NewPolicy(mode, rules)
+	if p.TalkootMember {
+		pol.AskKeeps = memberAskKeeps
+	}
 	if p.TeamBridge {
 		// Plan refuses before the rules run. A planning member replies to its
 		// team as a native one does, through planKeeps.
@@ -841,6 +854,57 @@ func policyFromConfig(p Inputs, cfg config.Config) (*permission.PermissionPolicy
 		}
 	}
 	return pol, warns, projErr
+}
+
+// memberAskKeeps names the calls of a Talkoot member that ask and auto-edit
+// run with no approval card: a request for a routine, and a message to the
+// person alone (TKT-01M7TCSS9). Each only puts something before the person.
+// A routine's own card still waits for an approval, and a message to the
+// person starts no turn and spends no budget.
+//
+// The two postures above plan asked for both tools, and plan ran both through
+// planKeeps. So the stricter posture was the looser one. With nobody present
+// a card ends the work at the deadline, so a routine of a member in ask or
+// auto-edit could not report what it found.
+//
+// 🚨 It holds only while routines are on in the user configuration, and it
+// reads that key at each call. Routines are what make a member work with
+// nobody present, and a person turns them on from the user layer alone. A
+// person who never turned them on keeps every card that ask and auto-edit
+// opened before. Turning routines off brings the cards back at the next call.
+//
+// 🚨 A message with a member among its recipients still asks. An envelope
+// starts that member's turn, in that member's posture, on that member's
+// budget. talkoot.AddressesPerson holds for every roster, so this needs no
+// roster. A person's bare name is not such an address, and a send to it asks.
+// The router refuses an address of a person who is not at the chain's root.
+//
+// A deny rule or an ask rule that a person wrote still decides the call,
+// because the policy reads its rules first.
+func memberAskKeeps(toolName string, args json.RawMessage) bool {
+	switch toolName {
+	case "talkoot_routine", "talkoot_send":
+	default:
+		return false
+	}
+	if !config.TalkootRoutines().On {
+		return false
+	}
+	if toolName == "talkoot_routine" {
+		return true
+	}
+	// 🔑 The tool's own decode. The gate must read the recipients that the
+	// tool then sends to. Arguments that the tool refuses get the card.
+	to, ok := tools.TalkootSendTo(args)
+	if !ok || len(to) == 0 {
+		return false
+	}
+	for _, recipient := range to {
+		if !talkoot.AddressesPerson(recipient) {
+			return false
+		}
+	}
+	return true
 }
 
 // decomposeBashForPolicy is the shell splitter the permission policy

@@ -70,7 +70,6 @@ personas.list	params=-	result=PersonasListResult
 post.line	params=PostLineParams	result=-
 prompt	params=PromptParams	result=-
 queue	params=QueueParams	result=-
-queue.send	params=QueueSendParams	result=-
 queue.set	params=QueueSetParams	result=-
 replay.control	params=ReplayControlParams	result=ReplayStateResult
 replay.state	params=-	result=ReplayStateResult

@@ -217,3 +217,42 @@ func TestEveryTalkootToolIsASeatTool(t *testing.T) {
 		}
 	}
 }
+
+// 🚨 The permission gate lets a send through with no approval when every
+// recipient is the person (permissions.memberAskKeeps). It reads the
+// recipients with TalkootSendTo. So TalkootSendTo must return the list that
+// the tool then sends to, for every payload, the odd ones included.
+func TestTalkootSendToReturnsTheRecipientsThatTheToolSendsTo(t *testing.T) {
+	for _, args := range []string{
+		`{"to":["human"],"kind":"message","body":"x"}`,
+		`{"to":["human","jev"],"kind":"message","body":"x"}`,
+		// The decode keeps the last of two keys, and it matches a key in
+		// any case.
+		`{"to":["human"],"to":["jev"],"kind":"message","body":"x"}`,
+		`{"to":["human"],"TO":["jev"],"kind":"message","body":"x"}`,
+		`{"To":["jev"],"to":["human"],"kind":"message","body":"x"}`,
+		`{"to":[],"kind":"message","body":"x"}`,
+		`{"kind":"message","body":"to: human"}`,
+		`{"to":null,"kind":"message","body":"x"}`,
+	} {
+		seat := &fakeSeat{}
+		if _, err := talkootText(t, &TalkootSendTool{Seat: seat}, args); err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		got, ok := TalkootSendTo(json.RawMessage(args))
+		if !ok || len(seat.sent) != 1 || !slices.Equal(got, seat.sent[0].To) {
+			t.Errorf("%s: the gate reads %q, and the tool sends to %+v", args, got, seat.sent)
+		}
+	}
+	// Arguments that the tool refuses to decode report false, and the gate
+	// then keeps the card.
+	for _, args := range []string{`{"to":"human","body":"x"}`, `["human"]`, `{"to":[1]}`, `not json`} {
+		seat := &fakeSeat{}
+		if _, err := talkootText(t, &TalkootSendTool{Seat: seat}, args); err == nil || len(seat.sent) != 0 {
+			t.Errorf("%s: the tool decoded it and sent %+v", args, seat.sent)
+		}
+		if _, ok := TalkootSendTo(json.RawMessage(args)); ok {
+			t.Errorf("%s: TalkootSendTo reports true for arguments that the tool refuses", args)
+		}
+	}
+}

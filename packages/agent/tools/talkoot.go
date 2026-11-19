@@ -111,6 +111,22 @@ func TalkootTools(seat TalkootSeat) []core.Tool {
 	}
 }
 
+// TalkootRunTools returns the tools for the session of a routine's run: the
+// roster and the notes. A run sends nothing, so it gets none of the rest.
+// waker is nil for a run that may set no follow-up, and such a run gets no
+// talkoot_wake.
+func TalkootRunTools(seat TalkootSeat, waker TalkootWaker) []core.Tool {
+	out := []core.Tool{
+		&TalkootRosterTool{Seat: seat},
+		&TalkootNoteWriteTool{Seat: seat},
+		&TalkootNoteReadTool{Seat: seat},
+	}
+	if waker != nil {
+		out = append(out, &TalkootRunWakeTool{Seat: waker})
+	}
+	return out
+}
+
 // TalkootProposeTool proposes a roster change for a person to decide.
 type TalkootProposeTool struct{ Seat TalkootSeat }
 
@@ -151,6 +167,25 @@ type talkootSendArgs struct {
 	ReplyTo string   `json:"reply_to"`
 }
 
+// TalkootSendTo returns the recipients that talkoot_send reads from raw. It
+// reports false for arguments that the tool does not decode.
+//
+// 🔑 The permission gate decides by these recipients before the tool runs
+// (permissions.memberAskKeeps). It calls this function and decodes nothing
+// itself, so the gate and the tool cannot read two different lists from one
+// payload. The decode matches a key in any case and keeps the last of two.
+func TalkootSendTo(raw json.RawMessage) ([]string, bool) {
+	a, err := decodeTalkootSend(raw)
+	return a.To, err == nil
+}
+
+// decodeTalkootSend is the one decode of the arguments of talkoot_send.
+func decodeTalkootSend(raw json.RawMessage) (talkootSendArgs, error) {
+	var a talkootSendArgs
+	err := json.Unmarshal(raw, &a)
+	return a, err
+}
+
 // TalkootSendTool sends a message, a note, or an answer.
 type TalkootSendTool struct{ Seat TalkootSeat }
 
@@ -160,8 +195,8 @@ func (t *TalkootSendTool) Description() string {
 }
 func (t *TalkootSendTool) Schema() json.RawMessage { return json.RawMessage(talkootSendSchema) }
 func (t *TalkootSendTool) Execute(_ context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {
-	var a talkootSendArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
+	a, err := decodeTalkootSend(raw)
+	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
 	}
 	// A handoff has its own tool, which asks for the references up front.

@@ -88,6 +88,9 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why,
 		if applied.Status != talkoot.ProposalApproved {
 			return talkoot.Proposal{}, fmt.Errorf("talkoot: proposal %s is %s, and only an approved proposal can be undone", undo, applied.Status)
 		}
+		if applied.Routine != nil {
+			return talkoot.Proposal{}, fmt.Errorf("talkoot: proposal %s stored a routine, and a person deletes a routine from its list", undo)
+		}
 		if ops, err = talkoot.Inverse(applied.Changes, applied.Team); err != nil {
 			return talkoot.Proposal{}, err
 		}
@@ -265,7 +268,7 @@ func (w *Workspace) talkootProposals(id string, all bool) ([]talkoot.Proposal, e
 // the proposal's operations, which the record keeps. The edit passes every
 // check the originals did. An empty list is no edit, so a client that always
 // sends the field can approve as made.
-func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision string, edited []talkoot.Op, reason string) (talkoot.Proposal, error) {
+func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision string, edited []talkoot.Op, reason, digest string) (talkoot.Proposal, error) {
 	if !talkoot.ValidPerson(strings.TrimPrefix(by, talkoot.HumanPrefix)) {
 		return talkoot.Proposal{}, fmt.Errorf("talkoot: %q must name a person in 1 to 64 letters, digits, and . _ @ -", by)
 	}
@@ -319,6 +322,18 @@ func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision str
 		}
 		w.talkootEmit(talkootEvent{Talkoot: id, Kind: "inbox", Wire: new(ctrlproto.TalkootInboxEvent(id, proposalCard(id, p)))})
 		return p, err
+	}
+	// A proposal that asks for a routine changes no roster. Its approval
+	// stores the routine and sets its timer (workspace_talkoot_routines.go).
+	if p.Routine != nil {
+		if edit {
+			return talkoot.Proposal{}, errors.New("talkoot: a routine's card takes no edited operations. Decline it with a reason, and the member asks again")
+		}
+		out, err := w.approveRoutine(run, by, digest, p, waiting, refused)
+		if err == nil {
+			resolved()
+		}
+		return out, err
 	}
 	text, err := os.ReadFile(filepath.Join(run.dir, talkoot.FileName))
 	if err != nil {
@@ -450,6 +465,11 @@ func wireProposal(p talkoot.Proposal) ctrlproto.TalkootProposal {
 	if p.Persona != nil {
 		out.Persona = &ctrlproto.TalkootPersonaDraft{Name: p.Persona.Name, Text: p.Persona.Text}
 	}
+	if p.Routine != nil {
+		// A routine starts work with no person present, so its card reads
+		// as a change of authority.
+		out.Class, out.Routine = string(talkoot.ClassAuthority), wireRoutineAsk(p)
+	}
 	for _, op := range p.Ops {
 		out.Ops = append(out.Ops, ctrlproto.TalkootOp{Op: op.Op, Member: op.Member, Set: op.Set})
 	}
@@ -468,6 +488,8 @@ func proposalTitle(p talkoot.Proposal) string {
 		return "proposal " + p.ID + " does not read"
 	case p.Proposer == "":
 		return "proposal " + p.ID + ", whose record did not read, was " + p.Status
+	case p.Routine != nil:
+		return p.Proposer + " asks for a " + p.Routine.Kind + " routine, " + p.Routine.Schedule
 	case isMemberProposer(p.Proposer) && talkoot.SelfAuthority(p.Proposer, p.Ops):
 		return p.Proposer + " proposes a change to its own authority: " + p.Summary
 	case strings.HasPrefix(p.Proposer, talkoot.RecruiterPrefix) && p.Persona != nil:
@@ -543,6 +565,9 @@ func (s talkootSeat) Propose(ops []talkoot.Op, undo, why string) (talkoot.Propos
 	defer s.b.mu.RUnlock()
 	if s.b.revoked {
 		return talkoot.Proposal{}, errSeatRevoked
+	}
+	if s.b.routine != nil {
+		return talkoot.Proposal{}, errRunSeat
 	}
 	return s.w.talkootPropose(s.b.run.id, s.b.member, ops, undo, why, "", func() error {
 		if s.b.retired.Load() {

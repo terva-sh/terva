@@ -92,7 +92,7 @@ func TestAnApprovedAddIntroducesTheNewMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.talkootDecide(t.Context(), "crew", "kaisa", p.ID, ctrlproto.TalkootDecisionApprove, nil, ""); err != nil {
+	if _, err := w.talkootDecide(t.Context(), "crew", "kaisa", p.ID, ctrlproto.TalkootDecisionApprove, nil, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	intros := introsTo(t, "atlas")

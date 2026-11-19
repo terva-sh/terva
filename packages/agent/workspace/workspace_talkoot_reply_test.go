@@ -477,8 +477,8 @@ func TestNativeFinalReplyRevokedSeatCannotPublish(t *testing.T) {
 	old := s.ws.talkoot.seats[s.id]
 	old.revoke()
 	s.ws.talkoot.seats[s.id] = &seatBinding{run: old.run, member: "jev"}
-	publish("An old turn's reply.")
-	end(0, true, "", false)
+	publish("An old turn's reply.", true)
+	end(0, true, "", false, false)
 	for _, l := range replyRoomLines(t, room) {
 		if l.Type == talkoot.LineEnvelope && l.Envelope.From != "human:Drew" {
 			t.Fatalf("revoked turn spoke through another seat: %+v", l.Envelope)

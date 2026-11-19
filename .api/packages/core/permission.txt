@@ -77,6 +77,7 @@ NewPolicyGate	func unstable	func(policy *PermissionPolicy, inner Confirmer) *Con
 ParseApprovalMode	func	func(s string) (ApprovalMode, error)
 ParseClassifierMode	func	func(s string) (ClassifierMode, error)
 PermissionPolicy	type unstable	struct
+PermissionPolicy.AskKeeps	field unstable	func(toolName string, args json.RawMessage) bool
 PermissionPolicy.Builtin	field unstable	map[string]bool
 PermissionPolicy.DecomposeCommand	field unstable	func(toolName string, args json.RawMessage) []json.RawMessage
 PermissionPolicy.EditTools	field unstable	map[string]bool

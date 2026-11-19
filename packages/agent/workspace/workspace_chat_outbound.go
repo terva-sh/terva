@@ -338,6 +338,15 @@ func (o *chatOutbound) notice(now time.Time, id, reason, text string) []chatLine
 	return []chatLine{{"", text}}
 }
 
+// forBrief takes a text that the host writes for the next brief. It never
+// goes out before the brief, and a quiet moment of the team does not take it
+// for a last word.
+func (o *chatOutbound) forBrief(now time.Time, id, text string) {
+	o.mu.Lock()
+	defer o.done(o.stamp())
+	o.holdLocked(chatHeld{ID: id, Text: text, At: now, Passed: true})
+}
+
 // settled is called when the team stopped working with nobody waiting on a
 // person. The newest update of each chain is the team's last word on that
 // work, so it goes out now. The older updates stay for the brief.

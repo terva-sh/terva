@@ -184,6 +184,14 @@ func ClassOf(field string) (FieldClass, bool) {
 // the write still lands in the checkout.
 func (m Member) Writes() bool { return m.Posture != string(permission.ApprovalPlan) }
 
+// OwnCheckout reports whether the roster gives the member a checkout that no
+// other member works in: a leased worktree. A member with `either` counts
+// here too, in and out of its worktree, because the router does not know
+// where such a member is.
+func (m Member) OwnCheckout() bool {
+	return m.Workspace == WorkspaceWorktree || m.Workspace == WorkspaceEither
+}
+
 // idPattern bounds talkoot and member ids. No colon or slash, because the
 // room address is #talkoot:<id> and a federated id uses "/".
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
@@ -356,6 +364,11 @@ func Validate(r Roster, env Env) error {
 			add("%s has no id", who)
 		case !idPattern.MatchString(m.ID):
 			add("member id %q must be lower case letters, digits, and dashes, starting with a letter", m.ID)
+		case m.ID == PersonWord:
+			// 🔑 A send to this word goes to the person, and the permission
+			// gate lets it through with no approval. A member of that name
+			// would get those sends, and each starts a turn.
+			add("member id %q is the word for the person, and no member can have it", m.ID)
 		case seen[m.ID]:
 			add("member id %q appears twice", m.ID)
 		}

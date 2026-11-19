@@ -36,6 +36,14 @@ func TestNewPolicyFillsEveryField(t *testing.T) {
 		if name == "Rules" {
 			continue // legitimately empty for a rule-less policy
 		}
+		if name == "AskKeeps" {
+			// Legitimately nil for a session with no seat in a talkoot.
+			// policyFromConfig sets it for a member, and
+			// TestAMemberAsksForARoutineAndWritesToThePersonWithNoCard holds
+			// that. A session with no seat has neither tool. Its policy must
+			// not keep a foreign tool that took one of the two names.
+			continue
+		}
 		if v.Field(i).IsZero() {
 			t.Errorf("NewPolicy leaves %s at its zero value. Every field here decides how a tool "+
 				"is judged once the mode tightens; an unset one is a silent difference in behaviour "+

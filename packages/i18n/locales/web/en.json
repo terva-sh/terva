@@ -642,6 +642,7 @@
   "What every member reads: how the team works, who decides, and when to ask you.": "What every member reads: how the team works, who decides, and when to ask you.",
   "What happens next": "What happens next",
   "What is encrypted at rest on this daemon, and what its own agent may read. No secret value is sent here.": "What is encrypted at rest on this daemon, and what its own agent may read. No secret value is sent here.",
+  "While routines are on, a member asks for a routine, and writes to you, with no approval card.": "While routines are on, a member asks for a routine, and writes to you, with no approval card.",
   "Wipe the conversation (no summary)": "Wipe the conversation (no summary)",
   "Work": "Work",
   "Worker": "Worker",

@@ -52,6 +52,8 @@ var registeredElsewhere = map[string]string{
 	"talkoot_note_read":  "workspace injectExtraTools, iff the session holds a talkoot seat",
 	"talkoot_propose":    "workspace injectExtraTools, iff the session holds a talkoot seat, recruits for a talkoot, or is the team manager",
 	"talkoot_workspace":  "workspace injectExtraTools, iff the session holds the seat of a workspace: either member",
+	"talkoot_wake":       "workspace injectExtraTools, iff the session holds a talkoot seat and talkoot_wakes turns wakes on",
+	"talkoot_routine":    "workspace injectExtraTools, iff the session holds a talkoot seat and talkoot_routines turns routines on",
 	"share_file":         "workspace injectExtraTools — every session the workspace host serves",
 }
 

@@ -64,7 +64,7 @@ export function noticeLine(card: TalkootCard): string {
     case 'ask':
       return t('%s asks you a question', card.member)
     case 'proposal':
-      return t('%s proposes a roster change', card.member)
+      return card.proposal?.routine ? t('%s asks for a routine', card.member) : t('%s proposes a roster change', card.member)
     case 'kickoff':
       return t('The team waits for you to start the introductions')
   }

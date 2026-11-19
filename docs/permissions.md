@@ -157,9 +157,31 @@ lets you revoke this session's grants (see below).
 |---|---|
 | `yolo` | every tool call runs without asking. `ask` rules don't prompt here, because yolo never prompts, but `deny` rules still block |
 | `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code. A foreign tool with the `network-read` authority still asks, even though it reads nothing locally. That includes a read-only tool on a remote MCP server, reached directly or through `terva-mcp-bridge` (see below) |
-| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends |
-| `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did) |
+| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends. While routines are on, a talkoot member's two calls to the person, described below the table, do not ask |
+| `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did). While routines are on, a talkoot member's two calls to the person do not ask |
 | `plan` | only read-only tools run, and mutating tools don't even enter the registry, so the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted. The one exception is a talkoot member's `talkoot_send` and `talkoot_handoff`, because a planning member's plan reaches its team as an envelope. Plan does not prompt for them, and your deny and ask rules still apply. An envelope starts the recipient's turn in the recipient's own posture, so a planning member can wake a member that writes. Write an ask rule for the two tools to approve each send |
+
+**While routines are on, two calls of a talkoot member go to the person
+with no approval card.** `talkoot_routines` in your user configuration turns
+routines on, and the foot of the rail in the Talkoot app says so while this
+holds. With routines off, `ask` and `auto-edit` ask for both calls, as they
+did before.
+
+One call is `talkoot_routine`, which only draws the card that you approve.
+The other is a `talkoot_send` whose every recipient is `human` or a
+`human:<name>` address. It writes to you, starts no turn and spends no
+budget. A routine's member works with nobody present, and a card then ends
+the work at its deadline, so such a member could not say what a run found.
+`plan` already ran both calls, so `ask` and `auto-edit` were the stricter
+postures and the looser ones for them.
+
+A `talkoot_send` with a member among its recipients still asks, because it
+starts that member's turn. An `ask` rule or a `deny` rule that you write for
+either tool still decides the call. Write an `ask` rule for `talkoot_send`
+when the team's messages to you leave the machine through a
+[chat bridge](talkoot.md#reach-the-team-from-chat) and you want to read each
+one first. A member whose turn read hostile text can put what it read into
+such a message.
 
 **Defaults differ by run mode.** An interactive session defaults to
 `workspace` (a human is present to answer the foreign-tool prompts) and
@@ -635,14 +657,23 @@ The rule refuses a call that does one of these:
 
 | What the call does | Examples |
 |---|---|
-| Merges through a forge's CLI or a script: the word `pr`, `pull` or `mr`, and then `merge` | `gh pr merge 12`, `tea pulls merge 12`, `glab mr merge 12`, `./scripts/pr.sh merge 12` |
+| Merges through a forge's CLI or a script: the word `pr`, `pull` or `mr`, and then `merge`. `tea` also has `m`, and `glab` has `accept` | `gh pr merge 12`, `tea pulls merge 12`, `glab mr accept 12`, `./scripts/pr.sh merge 12` |
 | Runs a recipe whose name says that it merges | `just pr-merge 12`, `make merge-pr` |
 | Names a forge's merge endpoint | `curl -X POST https://forge.example/api/v1/repos/o/r/pulls/12/merge`, the GraphQL mutation `mergePullRequest` |
 | Pushes to a protected branch | `git push origin HEAD:main`, `git push origin --delete main` |
 | Pushes more branches than it names | `git push --all`, `git push --mirror` |
+| Pushes with an option that asks the forge to merge when the checks pass | `git push -o merge_request.merge_when_pipeline_succeeds`, `git push -o merge_request.auto_merge` |
 | Pushes to a place that the rule cannot read | `git push origin "$branch"`, `git checkout main && git push` |
-| Calls a tool of an extension or an MCP server whose name says merge and pull request | `mcp_github_merge_pull_request` |
-| Gives such a tool a merge endpoint at any depth of its arguments, or a command that the rows above refuse, under the name `command`, `cmd`, `script`, `shell`, `bash` or `sh` | `{"command": "gh pr merge 12"}` |
+| Calls a tool of an extension or an MCP server whose name says that it merges: merge with a pull request, a branch or a queue, or the forge's own word for it, such as accept, complete or enqueue | `mcp_github_merge_pull_request`, `mcp_forgejo_merge`, `mcp_gitlab_accept_merge_request`, `add_to_merge_queue` |
+| Calls a tool whose name says push, with no branch named or with a protected one | `mcp_git_git_push` with only a `repo_path` |
+| Gives a tool a merge endpoint at any depth of its arguments, or a command that the rows above refuse | `{"command": "gh pr merge 12"}`, `{"program": "gh", "args": ["pr", "merge", "12"]}` |
+
+The rule reads a command of such a tool under the name `command`, `commands`,
+`cmd`, `script`, `shell`, `bash`, `sh`, `program`, `executable`, `exe` or
+`binary`, as a text or as a list of words. It reads a list under `argv` too.
+A program under one of those names takes its words from `args`, `arguments`,
+`argv` or `params`. A tool whose name says get, list or search reads, and
+the rule has no word on its name.
 
 The rule reads the path of an endpoint as curl and the forge clean it. So
 `/pulls/12/./merge` and `/pulls/12/%6derge` are the same endpoint as
@@ -706,7 +737,7 @@ Two keys of `talkoot_routines` in your user configuration add to the rule:
 
 | Key | What it adds |
 |---|---|
-| `merge_commands` | RE2 patterns for a command that merges. Each one is tried against the whole line and against each command in it, with the quotes removed |
+| `merge_commands` | RE2 patterns for a command that merges. Each one is tried against the whole line and against each command in it, with the quotes removed. In a line that the daemon cannot parse, each one is tried at the front of each word |
 | `protected_branches` | Branches that such work may not push to. A name may hold the wildcards of a shell |
 
 The rule reads a line inside a line: the argument of `sh -c` and of `eval`,
@@ -714,13 +745,21 @@ a here document that a shell reads, and the value of an alias. A shell at the
 end of a pipe runs a text that the rule cannot know, so there a word of a
 merge or of a push anywhere on the line is enough for a refusal.
 
-A line has bounds: the bounds of every `bash` command (128 KiB and 16,384
-marks that can nest), and four shells inside each other. The rule refuses a line past a bound, and it tells the agent to write
-a file and to run a short command. It also refuses arguments that it cannot
-decode.
+A line has bounds, and the rule refuses a line past one. The refusal says
+what to do in its place.
 
-A pattern that does not compile turns routines off, and the team's section of
-the rail says why. Each pattern that does compile stays in force for work of
+| Bound | What the refusal says |
+|---|---|
+| The bounds of every `bash` command: 128 KiB, and 16,384 marks that can nest | Write a file, and run a short command |
+| Four shells inside each other | Run the command with no shell around it |
+| 16 names of programs among the words of one command | Run each command by itself |
+| A command in a variable that the line fills, where the rule does not see with what, as in `read c; $c` | Write the command itself |
+
+It also refuses arguments that it cannot decode, and an object of a tool
+that gives more than 8 commands beside a list of words.
+
+A pattern that does not compile turns routines off, and so does an entry
+that is empty. The foot of the rail in the Talkoot app says why. Each pattern that does compile stays in force for work of
 a routine that has not ended yet.
 
 **The rule explains, and the forge account binds.** The rule reads the text of
@@ -732,6 +771,74 @@ to tell an agent why the merge is not its to make, at each route that it
 tries. The guard that holds is on the forge. Run the daemon of unattended
 work under a forge account that has no right to merge to trunk, and protect
 trunk there. The rule then covers a mistake, and the account covers the rest.
+
+## The review count of unattended work
+
+A model review runs on the forge, and the daemon cannot see what it costs.
+It can count the requests. Each routine has a `reviews_per_day` limit, and
+each review request in work that the routine began counts against it. That
+covers the requests of a run and those of the member that reads the run's
+report. The daemon refuses the request past the limit, and the count starts
+again each day. A restart of the daemon keeps the count, because each
+request is a line in the team's room.
+
+A review request has no built-in form, because each forge and each
+repository asks for a model review in its own way. You name the commands in
+your user configuration:
+
+```json
+{
+  "talkoot_routines": {
+    "max": 5,
+    "review_commands": ["^just pr-review\\b"]
+  }
+}
+```
+
+| Key | What it names |
+|---|---|
+| `review_commands` | RE2 patterns for a command that asks for a review. Each one is tried against each command of a line, with the quotes removed and with no runner such as `timeout` in front. It is also tried against the name of a tool of an extension |
+
+**With no pattern, nothing counts.** The limit then binds nothing, and the
+card of a routine and the list of routines each say so.
+
+Anchor each pattern at the front of the command, as `^just pr-review\b` is.
+A pattern with no anchor also matches a command that only names the request,
+such as a `grep` for it, and that command then spends a request. A pattern
+must match one command. The daemon refuses a line that a pattern matches
+only as a whole, because it cannot count the requests in it.
+
+The count is taken after your hooks and your rules allowed the call, and
+before the command runs. So a call that a rule refused spends nothing, and a
+request that then fails on the forge still spent one.
+
+A count must be exact, so the daemon counts only a request that the shell
+runs one time, as a command of its own. Two requests that `&&` joins count
+as two. For a request in any other place the daemon has no number. It
+refuses the call, and it tells the agent to ask in a command of its own:
+
+- a request in a loop or in a function
+- a request behind `xargs`, `watch`, `find -exec` or `parallel`
+- a request in a shell in a shell, such as `sh -c` or `eval`, or in a here
+  document that a shell reads
+- a request in a variable that holds the command
+- a request in a line that the daemon cannot parse
+
+The daemon does not read a line past the bounds of a `bash` command, so it
+cannot say that such a line holds no request. It refuses the call, with or
+without a request in it.
+
+The daemon finds a request with the reader of
+[the unattended merge rule](#the-unattended-merge-rule), so it looks in each
+place where that rule looks. It has the limits of that rule too. A script
+that asks for a review passes with no count. So does a request in a swarm
+child's own session, and one in the shell of a member that another harness
+runs. One request can also start more than one reviewer, as a panel does,
+and it counts as one.
+
+**The count is no budget.** It bounds an agent that follows its
+instructions, at each request that the daemon can see. It does not bound
+what the forge spends on a review.
 
 ## Permission rules
 
@@ -770,8 +877,10 @@ line, and an anchored `deny` (`^rm `) still matches a command that isn't
 first. An unparsable line falls back to matching the whole string.
 
 A `bash` command has bounds: 128 KiB, and 16,384 marks that can nest, such
-as `(`, `{`, `[`, `|` and `&`. The text of the commands that it splits into
-has a bound too, which only a line of commands inside commands reaches, as in
+as `(`, `{`, `[`, `|` and `&`. A run of more than 16,384 `+` and `-` signs
+is past a bound too, because a run of signs in a sum is as deep as it is
+long. The text of the commands that a line splits into has a bound of 1 MiB,
+which only a line of commands inside commands reaches, as in
 `echo $(echo $(echo ...))`. terva refuses a command past a bound in every
 approval mode, and it tells the agent to write a file and to run a short
 command. A line that deep ends the process in the shell parser, and a line

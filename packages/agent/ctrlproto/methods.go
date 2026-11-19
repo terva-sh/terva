@@ -19,7 +19,6 @@ const (
 	MethodPrompt        Method = "prompt"         // params PromptParams
 	MethodQueue         Method = "queue"          // params QueueParams
 	MethodQueueSet      Method = "queue.set"      // params QueueSetParams (edit/cancel pending queue)
-	MethodQueueSend     Method = "queue.send"     // params QueueSendParams (interrupt the turn with queued entries)
 	MethodCancel        Method = "cancel"         // no params
 	MethodCompact       Method = "compact"        // no params; summarize+replace the transcript
 	MethodClear         Method = "clear"          // no params; wipe the transcript (no summary)
@@ -459,7 +458,7 @@ const (
 // Group returns the method group m belongs to, or "" if unknown.
 func (m Method) Group() Group {
 	switch m {
-	case MethodPrompt, MethodQueue, MethodQueueSet, MethodQueueSend, MethodCancel, MethodCompact,
+	case MethodPrompt, MethodQueue, MethodQueueSet, MethodCancel, MethodCompact,
 		MethodClear, MethodMessageEdit, MethodMessageDelete, MethodTurnSwipe, MethodTurnRetry, MethodTurnContinue, MethodTurnResume, MethodApprove, MethodAnswer,
 		MethodPostLine, MethodDirectTurn, MethodTurnAdvance, MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe,
 		MethodShellResult:
@@ -633,22 +632,6 @@ func (p QueueSetParams) Entries() (entries []core.QueuedMessage, known bool, err
 		entries[i].Source = p.Sources[i]
 	}
 	return entries, known, nil
-}
-
-// QueueSendParams is the payload of [MethodQueueSend]: which entries of the
-// pending queue go now, ahead of the running turn. The session stops that
-// turn and starts the next one on them.
-type QueueSendParams struct {
-	// Index names one entry, counted from zero. The entries that it leaves
-	// stay queued for the next safe boundary after the new turn's first
-	// model call.
-	Index int `json:"index"`
-	// Text is the text that the client saw at Index. The queue can change
-	// between a queue_updated event and this call, so a session that holds
-	// another text there refuses with [CodeConflict] and changes nothing.
-	Text string `json:"text,omitempty"`
-	// All sends the whole queue, in order. Index and Text are then unused.
-	All bool `json:"all,omitempty"`
 }
 
 // ApproveParams is the payload of [MethodApprove].

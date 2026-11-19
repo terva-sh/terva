@@ -1425,3 +1425,228 @@ describe('the proposal card', () => {
     await screen.findByText('This answer is kept in the talkoot room, and a teammate may see it.')
   })
 })
+
+describe('the card of a routine', () => {
+  const routineClient = (routine: object, extra: object = {}) =>
+    fakeClient({
+      respond: (method: Verb) => {
+        if (method === 'talkoot.inbox') {
+          return {
+            cards: [
+              {
+                session: '',
+                member: 'mieli',
+                kind: 'proposal',
+                id: 'p1',
+                proposal: {
+                  id: 'p1',
+                  proposer: 'mieli',
+                  at: '2026-11-18T10:00:00Z',
+                  title: 'mieli asks for a task routine, every 15m',
+                  summary: 'routine: a task, every 15m: Check CI.',
+                  why: 'The person asked for a watch on CI.',
+                  class: 'authority',
+                  ops: [],
+                  changes: [],
+                  status: 'pending',
+                  routine,
+                  ...extra,
+                },
+              },
+            ],
+          }
+        }
+        return teamRespond(method)
+      },
+    })
+  const fields = { end_after_runs: 0, end_after_days: 14, spend_usd_per_day: 25, reviews_per_day: 2, follow_ups: 2, catch_up: true }
+
+  it('shows the kind, the schedule and the prompt, and only the limits that differ from the defaults', async () => {
+    const client = routineClient({
+      kind: 'task',
+      schedule: 'every 15m',
+      prompt: 'Check the CI run of each open pull request.',
+      fields,
+      digest: 'sha256:abc',
+      differs: [
+        { field: 'spend_usd_per_day', value: '25.00', default: '5.00' },
+        { field: 'end_after_days', value: '14', default: '0' },
+      ],
+    })
+    render(<TalkootTeam client={client} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    expect(await screen.findByText('Check the CI run of each open pull request.')).toBeTruthy()
+    expect(screen.getByText('every 15m')).toBeTruthy()
+    expect(screen.getByText('Each run reads this prompt:')).toBeTruthy()
+    expect(screen.getByText('The person asked for a watch on CI.')).toBeTruthy()
+    const rows = [...document.querySelectorAll('.talkoot-routine-card .talkoot-fields tr')].map((tr) => tr.textContent)
+    // The limits that match the default of the kind stay off the card.
+    expect(rows).toEqual(['Spend in one day$25.00default: $5.00', 'Ends after this many days14default: no end'])
+    // 🚨 The card shows a spend limit, so it must say what stops a run.
+    expect(screen.getByText(/ends in a report to its member\. A routine that passes its daily spend limit pauses, and a run is stopped when its cost passes that limit\. This version does not enforce the review limit yet/)).toBeTruthy()
+    // 🚨 The follow-ups have their default here, so the list above hides
+    // them. They are more runs with nobody present, and the card says so.
+    expect(screen.getByText('A run may set a follow-up, which is one more run with no person present. This routine allows 2 after each run at its time, while wakes are on.')).toBeTruthy()
+    fireEvent.click(screen.getByText('Approve'))
+    await waitFor(() => expect(client.sent('talkoot.decide')).toHaveLength(1))
+    // The approval is for the card on the screen, so it names the card.
+    expect(client.sent('talkoot.decide')[0].params).toEqual({ id: 'crew', by: 'sothr', proposal: 'p1', decision: 'approve', digest: 'sha256:abc' })
+  })
+
+  it('says nothing of a follow-up on a card that allows none, and on a watcher', async () => {
+    const none = routineClient({ kind: 'task', schedule: 'every 15m', prompt: 'Check CI.', fields: { ...fields, follow_ups: 0 }, digest: 'sha256:abc' })
+    render(<TalkootTeam client={none} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    expect(await screen.findByText('Each run reads this prompt:')).toBeTruthy()
+    expect(screen.queryByText(/A run may set a follow-up/)).toBeNull()
+    cleanup()
+    const watcher = routineClient({ kind: 'watcher', schedule: 'every 5m', command: 'just ci', fields, digest: 'sha256:abc' })
+    render(<TalkootTeam client={watcher} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    expect(await screen.findByText('It runs this command, with no model:')).toBeTruthy()
+    expect(screen.queryByText(/A run may set a follow-up/)).toBeNull()
+  })
+
+  it('sends no digest with a decline', async () => {
+    const client = routineClient({ kind: 'task', schedule: 'every 15m', prompt: 'Check CI.', fields, digest: 'sha256:abc' })
+    render(<TalkootTeam client={client} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    fireEvent.click(await screen.findByText('Decline'))
+    await waitFor(() => expect(client.sent('talkoot.decide')).toHaveLength(1))
+    expect(client.sent('talkoot.decide')[0].params).toEqual({ id: 'crew', by: 'sothr', proposal: 'p1', decision: 'decline' })
+  })
+
+  it('shows a watcher command as written, and says when no limit differs', async () => {
+    const client = routineClient({ kind: 'watcher', schedule: 'every 5m', command: 'tea pulls ls --state open \\\n\t--output simple', fields }, { problem: 'routines are off on this daemon' })
+    render(<TalkootTeam client={client} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    expect(await screen.findByText('It runs this command, with no model:')).toBeTruthy()
+    expect(document.querySelector('.talkoot-routine-card pre')!.textContent).toBe('tea pulls ls --state open \\\n\t--output simple')
+    expect(screen.getByText('Every limit has the default of its kind.')).toBeTruthy()
+    expect(document.querySelector('.talkoot-routine-card .talkoot-fields')).toBeNull()
+    // A refused approval leaves its reason on the card.
+    expect(screen.getByText('routines are off on this daemon')).toBeTruthy()
+  })
+
+  // The daemon refuses such a record. The card still reads the kind, so a
+  // text in the other field can never stand in for the one a run reads.
+  it('shows the text that the kind takes, and never the other field', async () => {
+    const client = routineClient({ kind: 'task', schedule: 'every 15m', prompt: 'Delete every branch.', command: '   ', fields })
+    render(<TalkootTeam client={client} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    expect(await screen.findByText('Each run reads this prompt:')).toBeTruthy()
+    expect(document.querySelector('.talkoot-routine-card pre')!.textContent).toBe('Delete every branch.')
+    expect(screen.queryByText('It runs this command, with no model:')).toBeNull()
+  })
+
+  it('shows no default while routines are off, and says that the defaults are not known', async () => {
+    const client = routineClient({
+      kind: 'task',
+      schedule: 'every 15m',
+      prompt: 'Check CI.',
+      defaults_unknown: true,
+      differs: [{ field: 'spend_usd_per_day', value: '25.00' }],
+    })
+    render(<TalkootTeam client={client} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    expect(await screen.findByText(/the defaults are not known and an approval is refused/)).toBeTruthy()
+    const rows = [...document.querySelectorAll('.talkoot-routine-card .talkoot-fields tr')].map((tr) => tr.textContent)
+    expect(rows).toEqual(['Spend in one day$25.00'])
+    expect(screen.queryByText('Every limit has the default of its kind.')).toBeNull()
+  })
+
+  it('does not say that every limit has its default while the defaults are not known', async () => {
+    const client = routineClient({ kind: 'task', schedule: 'every 15m', prompt: 'Check CI.', defaults_unknown: true })
+    render(<TalkootTeam client={client} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    expect(await screen.findByText(/the defaults are not known/)).toBeTruthy()
+    expect(screen.queryByText('Every limit has the default of its kind.')).toBeNull()
+  })
+})
+
+describe('a routine in the room', () => {
+  it('shows an approval with every limit, and each pause, resume and delete', () => {
+    const base = { type: 'routine', at: '2026-11-18T10:00:00Z', member: 'helm', ref: '01R', by: 'human:sothr' }
+    const routine = {
+      id: '01R',
+      member: 'helm',
+      kind: 'task',
+      schedule: 'every 15m',
+      fields: { end_after_runs: 0, end_after_days: 0, spend_usd_per_day: 5, reviews_per_day: 2, follow_ups: 2, catch_up: false },
+      status: 'active',
+    }
+    const { container } = render(<RoomLine line={{ ...base, action: 'approved', routine }} />)
+    const text = container.textContent ?? ''
+    expect(text).toContain('sothr approved a task routine of helm, every 15m')
+    // 🚨 The card hid the limits that matched a default. The room shows all.
+    for (const want of ['Spend in one day: $5.00', 'Review requests in one day: 2', 'Follow-ups after one run: 2', 'After a missed time: no run', 'Ends after this many runs: no end', 'Ends after this many days: no end']) {
+      expect(text).toContain(want)
+    }
+    cleanup()
+    render(<RoomLine line={{ ...base, action: 'paused', reason: 'Too noisy.' }} />)
+    expect(screen.getByText('sothr paused a routine of helm: Too noisy.')).toBeTruthy()
+    cleanup()
+    render(<RoomLine line={{ ...base, action: 'resumed' }} />)
+    expect(screen.getByText('sothr resumed a routine of helm')).toBeTruthy()
+    cleanup()
+    render(<RoomLine line={{ ...base, action: 'deleted', reason: 'The work is done.' }} />)
+    expect(screen.getByText('sothr deleted a routine of helm: The work is done.')).toBeTruthy()
+    cleanup()
+    // A record that does not read names no member, and the line says so.
+    render(<RoomLine line={{ type: 'routine', at: base.at, ref: '01R', by: 'human:sothr', action: 'deleted' }} />)
+    expect(screen.getByText('sothr deleted a routine whose record did not read')).toBeTruthy()
+  })
+
+  it('shows what terva did with no person: a pause after a failed run, a time with no run, and the end', () => {
+    const base = { type: 'routine', at: '2026-11-18T10:00:00Z', member: 'helm', ref: '01R' }
+    render(<RoomLine line={{ ...base, action: 'paused', reason: 'a run failed: refused' }} />)
+    // No person paused it, so the line names none.
+    expect(screen.getByText('A routine of helm is paused: a run failed: refused')).toBeTruthy()
+    cleanup()
+    render(<RoomLine line={{ ...base, action: 'skipped', reason: 'its last run is still at work' }} />)
+    expect(screen.getByText('A routine of helm started no run: its last run is still at work')).toBeTruthy()
+    cleanup()
+    render(<RoomLine line={{ ...base, action: 'ended', reason: 'it started 5 of its 5 runs' }} />)
+    expect(screen.getByText('A routine of helm ended: it started 5 of its 5 runs')).toBeTruthy()
+  })
+
+  it('shows a run and its report as the routine of their member, and never as a member named routine', () => {
+    const at = '2026-11-18T10:00:00Z'
+    const run = { id: 'r1', talkoot: 'crew', from: 'routine:01R', to: [], kind: 'run', body: 'Check the CI run.', chain: { root: 'r1', hops: 0 }, at }
+    const { container } = render(<RoomLine line={{ type: 'envelope', at, member: 'helm', ref: 's1', by: 'human:sothr', envelope: run }} />)
+    const head = container.querySelector('.talkoot-line-head')!.textContent!
+    expect(head).toContain('A routine of helm')
+    expect(head).toContain('run, with no person present')
+    expect(head).not.toContain('routine:01R')
+    // A run goes to nobody, so the line shows no arrow.
+    expect(head).not.toContain('→')
+    expect(screen.getByText('Check the CI run.')).toBeTruthy()
+    cleanup()
+    const report = { id: 'r2', talkoot: 'crew', from: 'routine:01R', to: ['helm'], kind: 'report', body: 'CI is red.', chain: { root: 'r1', hops: 1 }, at }
+    const second = render(<RoomLine line={{ type: 'envelope', at, envelope: report }} />)
+    const reportHead = second.container.querySelector('.talkoot-line-head')!.textContent!
+    expect(reportHead).toContain('A routine of helm')
+    expect(reportHead).toContain('→ helm')
+    expect(reportHead).toContain('report')
+    expect(reportHead).not.toContain('routine:01R')
+  })
+})
+
+describe('a wake in the room', () => {
+  it('shows a wake when it is set, cancelled, dropped, and fired', () => {
+    const due = new Date()
+    due.setHours(23, 5, 0, 0)
+    const base = { type: 'wake', at: '2026-11-17T10:00:00Z', member: 'helm', ref: '01W', text: 'Check the CI run.', due: due.toISOString() }
+    render(<RoomLine line={{ ...base, action: 'set' }} />)
+    expect(screen.getByText('helm set a wake for 23:05: Check the CI run.')).toBeTruthy()
+    cleanup()
+    render(<RoomLine line={{ ...base, action: 'cancelled', by: 'human:sothr' }} />)
+    expect(screen.getByText('sothr cancelled a wake of helm: Check the CI run.')).toBeTruthy()
+    cleanup()
+    render(<RoomLine line={{ ...base, action: 'dropped', reason: 'wakes are off in the user configuration' }} />)
+    expect(screen.getByText('A wake of helm did not fire (wakes are off in the user configuration): Check the CI run.')).toBeTruthy()
+    cleanup()
+    const at = '2026-11-17T23:05:00Z'
+    const fired: TalkootLine = {
+      type: 'envelope',
+      at,
+      envelope: { id: '01W', talkoot: 'crew', from: 'helm', to: ['helm'], kind: 'wake', body: 'Check the CI run.', chain: { root: 'c1', hops: 0 }, at },
+    }
+    const { container } = render(<RoomLine line={fired} />)
+    expect(screen.getByText('woke itself')).toBeTruthy()
+    // No arrow from the member to itself.
+    expect(container.querySelector('.talkoot-line-to')).toBeNull()
+  })
+})

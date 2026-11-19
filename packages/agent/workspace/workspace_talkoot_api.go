@@ -575,9 +575,14 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 		}
 		delete(w.talkoot.seats, sid)
 	}
+	// 🚨 Under the run's lock, as the seats above. A run that began before
+	// this commit has its seat here, and one that begins after it reads the
+	// new roster (startRoutineRun).
+	stoppedRuns := w.stopChangedRunsLocked(run, prev, next)
 	w.talkoot.mu.Unlock()
 	run.mu.Unlock()
 
+	w.cancelRuns(stoppedRuns)
 	if h := w.workers(); h != nil {
 		for _, id := range retiring {
 			if err := h.stop(id); err != nil {

@@ -118,25 +118,51 @@ func TestPersonReplyIntroductionRootSurvivesReplay(t *testing.T) {
 	}
 }
 
+// A member id wins over a person's bare name. The word for the person and an
+// address with the prefix are never a member, because the roster refuses the
+// word as an id and an id admits no colon.
 func TestPersonReplyMemberIDsTakePrecedence(t *testing.T) {
 	f := newFixture(t, func(r *Roster, _ *Limits) {
 		m := r.Members[0]
-		m.ID, m.Role = "human", RoleSpecialist
+		m.ID, m.Role = "alex", RoleSpecialist
 		r.Members = append(r.Members, m)
 	})
-	if _, err := f.router.Post("human", nil, "Work.", nil, ""); err != nil {
+	if _, err := f.router.Post("alex", nil, "Work.", nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	e, err := f.router.Send("helm", Outgoing{To: []string{"human"}, Kind: KindMessage, Body: "member delivery"})
+	e, err := f.router.Send("helm", Outgoing{To: []string{"alex"}, Kind: KindMessage, Body: "member delivery"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.To[0] != "human" || len(f.native.to("human")) != 1 {
+	if e.To[0] != "alex" || len(f.native.to("alex")) != 1 {
 		t.Fatalf("member id became a person: %+v", e)
 	}
-	e, err = f.router.Send("helm", Outgoing{To: []string{"human:human"}, Kind: KindMessage, Body: "person reply"})
-	if err != nil || e.To[0] != "human:human" || len(f.native.to("human")) != 1 {
-		t.Fatalf("canonical person reply: %+v, %v", e, err)
+	for _, to := range []string{"human:alex", PersonWord} {
+		e, err = f.router.Send("helm", Outgoing{To: []string{to}, Kind: KindMessage, Body: "person reply to " + to})
+		if err != nil || e.To[0] != "human:alex" || len(f.native.to("alex")) != 1 {
+			t.Fatalf("a reply to %q did not go to the person alone: %+v, %v", to, e, err)
+		}
+	}
+}
+
+// 🚨 The permission gate lets a send through with no approval when every
+// recipient passes AddressesPerson. It has no roster to read. So no roster
+// may hold a member that such a recipient names.
+func TestNoMemberCanHaveAnAddressOfThePerson(t *testing.T) {
+	for _, to := range []string{PersonWord, "human:alex", "human:"} {
+		if !AddressesPerson(to) {
+			t.Errorf("AddressesPerson(%q) = false, want true", to)
+		}
+		r := mustParse(t, tigerTeam)
+		r.Members[1].ID = to
+		if err := Validate(r, fakeEnv()); err == nil {
+			t.Errorf("a roster with the member id %q is valid, and a send to it would need no approval", to)
+		}
+	}
+	for _, to := range []string{"alex", "humane", "Human", "", "human-1"} {
+		if AddressesPerson(to) {
+			t.Errorf("AddressesPerson(%q) = true: a member can have this id", to)
+		}
 	}
 }
 

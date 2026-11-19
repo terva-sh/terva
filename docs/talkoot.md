@@ -163,8 +163,12 @@ the model. External backends keep their own model names and do not receive
 the native catalog.
 
 A member can reply to the person who started its current chain with
-`talkoot_send` to `human:<name>`, `human`, or that person's exact name. Member
-ids take precedence over aliases. A member cannot choose another person, and
+`talkoot_send` to `human:<name>`, `human`, or that person's exact name. A
+member id takes precedence over a person's exact name. No member can have
+the id `human`, so that word always means the person. While routines are
+on, a send whose every recipient is `human` or a `human:<name>` address
+needs no approval card in `ask` and `auto-edit` posture. A member cannot
+choose another person, and
 a handoff still needs a member recipient. Replies to a person stay in the
 room and wake nobody.
 
@@ -278,9 +282,15 @@ only for one of these reasons.
 | **A reply** | You posted in the last 10 minutes, from chat or from the app, so you are in the conversation |
 | **The work finished** | The team stopped working, no member waits on you, and five seconds passed. The newest message of each piece of work goes out as its last word |
 | **A decision** | A roster proposal or a kickoff waits in the app |
+| **A routine paused itself** | A run failed, or the routine passed its daily spend limit. The routine starts no run until you resume it. Only the person who approved the routine gets this |
 | **A watched change** | Something you asked the team to watch changed. Nothing produces this reason yet |
 
 Every other message is an update. The daemon holds it for the brief.
+
+A run that ended at a question that nobody answered also waits for the
+brief. The chat already said that the question closed. The brief then holds
+the question and what the run left undone, for the person who approved the
+routine.
 
 **The brief** is one message that lists the held updates, each with its time
 and its sender. It lists the newest 30 and says how many older ones are in
@@ -293,10 +303,14 @@ brief when it starts, and not one for each time it missed. The brief lists
 what was held. No model writes it.
 
 **Quiet hours** are the range in `quiet`. In that range the daemon holds
-everything except a question and a reply. A question still goes out, because
-a member's turn waits on it, and a question that nobody hears parks the work
-until it expires. A reply goes out because a person who writes at night is
-awake. At the end of the range the daemon sends what it held for a reason,
+everything except a question, a reply, and a routine that paused itself. A
+question still goes out, because a member's turn waits on it, and a question
+that nobody hears parks the work until it expires. A reply goes out because
+a person who writes at night is awake. A routine that paused itself goes out
+because it does nothing at each of its times until you resume it. One
+failure of the network at night is enough to pause a routine, so it is
+enough to wake you. At the end of the range the daemon sends what it held
+for a reason,
 the oldest first. The updates stay for the brief. When you write in quiet
 hours, you also get what was held for a reason.
 
@@ -436,14 +450,15 @@ wake that fires shows as a message that the member sent to itself, marked
 
 | When | What the daemon does |
 |---|---|
-| The daemon was down at the wake's time | The wake fires when the daemon starts, and its text says how late the daemon was |
+| The daemon was down at the wake's time | The wake fires when the daemon starts, and its text says how late it is |
 | You turned wakes off | An open wake does not fire. The room records it as dropped |
 | The member left the roster | The wake is dropped, and the room says so |
 | The member or its chain is paused | The wake comes due and waits in the room as a message. The member reads it when you resume |
 | The chain has no hop left | The chain pauses, as it does for a message past the limit. A wake that comes due waits for your resume, and a new wake is refused |
 | A roster update runs at the wake's time | The daemon tries the wake again each half minute, for up to ten minutes. The wake's text does not call that wait late. After the last try the wake is dropped, and the room says so |
 | `talkoot_enabled` is off | Open wakes wait in the **Timers** pane with the reason, and none fires |
-| This daemon does not run the team at the wake's time | The wake is dropped. Only the daemon's log says so, because no room is open to write |
+| This daemon does not run the team at the wake's time | The wake waits for the team. A team that did not start has its problem in the list of teams, and that text counts the wakes that wait. The wake fires after the start of a daemon that runs the team, and its text says how late it is. You cannot cancel it while it waits |
+| The wake waited 7 days for its team, or the team's roster file is gone | The wake is dropped. Only the daemon's log says so, because no room is open to write |
 
 ## Approve work on a schedule
 
@@ -612,10 +627,14 @@ refused until you decide the first, so a member in a loop cannot fill the
 inbox with the same card.
 
 Only a `native` member has `talkoot_routine`, and a roster's `tools` list
-narrows it as it narrows `talkoot_wake`. A member in `plan` posture keeps
-it, because the tool only asks. A member in `ask` or `auto-edit` posture
-asks you before a call of this tool, as it does before `bash`. You then
-allow the call first, and the routine's card opens after that.
+narrows it as it narrows `talkoot_wake`. A member in every posture calls it
+with no approval card, because the tool only asks. The routine's own card
+is the approval. An `ask` rule or a `deny` rule that you write for
+`talkoot_routine` still decides the call.
+
+While routines are on, a member's message to you alone needs no approval
+card either, in attended work too. The foot of the rail says so.
+[permissions.md](permissions.md#approval-modes) has the rule and its reason.
 
 ### What a run does
 
@@ -633,17 +652,31 @@ with a line that says no person started it.
 The posture decides what a run can do. A member in `plan` posture has no
 `bash`, `write` or `edit`, and neither has its run. A run of a member in
 `ask` or `auto-edit` posture asks you before each command, and that card
-waits as [a question does](#a-question-that-nobody-answers). Such a member
-also asks before it sends you what the run found, because `talkoot_send` is
-a tool that its posture asks about. Give a routine to a member whose
-posture lets the work run with nobody there.
+waits as [a question does](#a-question-that-nobody-answers). **Always
+allow** on the card lets the next run call that command with no card. A
+message to you alone needs no card in any posture while routines are on, so
+the member can always tell you what the run found. A message to another
+member still asks, because it starts that member's turn. Give a routine to a
+member whose posture lets the work run with nobody there.
 
-A run works in its member's directory, and the member's own turn can work
-there at the same time. So can a run of another routine of the same member.
-A member with `workspace: worktree` shares its worktree with its runs. Two
-turns that edit the same files, or that run `git` at one moment, can
-collide. Give a routine work that reads and reports, or give it to a member
-that does no other work in that directory.
+A run works in its member's directory. For a member with a worktree of its
+own, `workspace: worktree` or `either`, the daemon keeps one turn at a time
+in that directory:
+
+| When | What the daemon does |
+|---|---|
+| A time comes while the member is in a turn | That time starts no run. The room says `started no run: developer is at work in its checkout` |
+| A time comes while another run of the member works | That time starts no run, and the room says that another run is still at work |
+| A message for the member arrives while its run works | The message waits. The room records that it is queued, and it goes out after the run's report |
+
+A turn that you type into the member's own session still starts at once. A
+follow-up that comes due while the directory is in use waits and tries
+again. A routine of a busy member therefore skips often. Give a check that
+must not skip to a member that does no other work.
+
+A member in the shared checkout has no such rule. It already works beside
+every other member, and so do its runs. Two turns there that edit the same
+files, or that run `git` at one moment, can collide.
 
 A routine has a daily spend limit of its own, `spend_usd_per_day`. The
 daemon counts what the routine's runs spent today, and it reads that count
@@ -937,7 +970,7 @@ write it by hand, and the daemon reads it when it starts.
 
 | Key | Meaning |
 |---|---|
-| `id` | The member's address in the room, as in `@developer`. Lower case letters, digits, and dashes |
+| `id` | The member's address in the room, as in `@developer`. Lower case letters, digits, and dashes. Not `human`, which is the word for the person |
 | `role` | `coordinator`, `planner`, or `specialist`. A team has exactly one coordinator |
 | `title` | A display title, such as `Developer` |
 | `persona` | The persona the member speaks as. See [personas.md](personas.md) |

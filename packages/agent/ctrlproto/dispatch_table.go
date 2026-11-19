@@ -48,9 +48,6 @@ var dispatch = map[Method]handler{
 	MethodQueue: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueParams) error {
 		return svc.Queue(ctx, f.Sess, p)
 	}),
-	MethodQueueSend: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueSendParams) error {
-		return svc.SendQueued(ctx, f.Sess, p)
-	}),
 	MethodQueueSet: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueSetParams) error {
 		return svc.SetQueue(ctx, f.Sess, p)
 	}),

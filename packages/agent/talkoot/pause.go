@@ -14,13 +14,16 @@ const (
 	pauseGuard  = "guard"  // the hop limit tripped
 	pauseRoom   = "room"   // the room could not record something, or cannot be trusted
 	pauseFailed = "failed" // the member's driver failed: a turn ended in an error, or its process stopped
+	// pauseUnanswered holds a chain that a routine began, after a question of
+	// one of its turns had no answer at its deadline (unanswered.go).
+	pauseUnanswered = "unanswered"
 )
 
 // pauseKinds is the order a status lists reasons in.
 //
 // Each cap is a kind of its own, so a member over its spend and its turns
 // shows both, and a resume that lifts one still names the other.
-var pauseKinds = []string{pausePerson, pauseSpend, pauseTurns, pauseTeam, pauseCost, pauseGuard, pauseRoom, pauseFailed}
+var pauseKinds = []string{pausePerson, pauseSpend, pauseTurns, pauseTeam, pauseCost, pauseGuard, pauseRoom, pauseFailed, pauseUnanswered}
 
 // talkootScope is the scope of a pause on every member at once.
 const talkootScope = "talkoot"
@@ -57,6 +60,8 @@ func kindOfGuard(guard string) string {
 		return pauseRoom
 	case GuardFailed:
 		return pauseFailed
+	case GuardUnanswered:
+		return pauseUnanswered
 	}
 	return pauseGuard
 }

@@ -18,6 +18,8 @@ import { PersonInput, TeamColor } from '../../ui/talkoot/TalkootScreen'
 import { loadSeen, MotionPicker, orderMembers, PRESENCE_LABEL, saveSeen } from '../../ui/talkoot/TalkootTeam'
 import { TeamBudget } from '../../ui/talkoot/TeamBudget'
 import { TeamChat } from '../../ui/talkoot/TeamChat'
+import { TeamRoutines } from '../../ui/talkoot/TeamRoutines'
+import { TeamWakes } from '../../ui/talkoot/TeamWakes'
 import { SaveTemplate } from '../../ui/talkoot/SaveTemplate'
 import { Recruit } from '../../ui/talkoot/Recruit'
 import { useTalkoot } from '../../ui/talkoot/useTalkoot'
@@ -201,6 +203,14 @@ export function TeamView({
                 <span class="talkoot-spend">{t('Today: $%s', spend.toFixed(2))}</span>
                 {view && <TeamBudget client={client} view={view} person={person} canSteer={canSteer} onError={setActionError} />}
                 <TeamChat chat={team.chat} />
+                <TeamWakes
+                  wakes={view?.wakes}
+                  onCancel={canSteer ? (wake) => act(client.send('talkoot.wake_cancel', { id, by: person, wake })) : undefined}
+                />
+                <TeamRoutines
+                  routines={view?.routines}
+                  onSet={canSteer ? (routine, action) => act(client.send('talkoot.routine_set', { id, by: person, routine, action })) : undefined}
+                />
                 <SaveTemplate client={client} id={id} onError={setActionError} />
                 {canSteer && <Recruit key={id} client={client} id={id} onError={setActionError} />}
                 {canSteer && (

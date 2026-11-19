@@ -119,7 +119,7 @@ func TestTalkootFromAddr(t *testing.T) {
 func TestTheSteerVerbsNeedTheSteerBit(t *testing.T) {
 	steer := []Method{MethodTalkootCreate, MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
 		MethodTalkootPropose, MethodTalkootDecide, MethodTalkootRecruit, MethodTalkootManager, MethodTalkootKickoff, MethodTalkootSaveTemplate,
-		MethodTalkootDiscard}
+		MethodTalkootDiscard, MethodTalkootWakeCancel, MethodTalkootRoutineSet}
 	for _, m := range steer {
 		if m.Capabilities()&CapSteer == 0 {
 			t.Errorf("%s does not need CapSteer", m)

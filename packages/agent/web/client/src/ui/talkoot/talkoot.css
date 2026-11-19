@@ -49,6 +49,16 @@
 .talkoot-spend { font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }
 .talkoot-budget { display: flex; flex-direction: column; gap: 6px; }
 .talkoot-chat { display: flex; flex-direction: column; gap: 6px; }
+.talkoot-wakes { display: flex; flex-direction: column; gap: 6px; }
+.talkoot-wakes li { display: flex; align-items: baseline; gap: 6px; }
+.talkoot-wakes li .btn { margin-left: auto; }
+.talkoot-routines { display: flex; flex-direction: column; gap: 6px; }
+.talkoot-routine-list { margin: 0; padding: 0; list-style: none; font-size: var(--fs-note); max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.talkoot-routine-list summary { cursor: pointer; }
+.talkoot-routine-list .preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+.talkoot-routine-list li[data-status="paused"] summary { color: var(--muted); }
+.talkoot-routine-actions { display: flex; gap: 6px; margin-top: 4px; }
+.talkoot-routine-card .preview { white-space: pre-wrap; overflow-wrap: anywhere; }
 .talkoot-outbound { display: flex; flex-direction: column; gap: 4px; }
 .talkoot-held { margin: 0; padding-left: 16px; font-size: var(--fs-note); max-height: 180px; overflow-y: auto; }
 .talkoot-held-why { color: var(--muted); }

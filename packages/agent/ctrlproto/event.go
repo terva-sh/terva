@@ -133,6 +133,15 @@ const (
 	// type intro with no envelope (Talkoot.Line, whose Text holds the card),
 	// on the room's address.
 	EventTalkootIntro = "talkoot_intro"
+	// EventTalkootWake carries a wake line (Talkoot.Line), on the room's
+	// address: a member set a wake, a person cancelled one, or one came due
+	// and was dropped. A wake that fires is an envelope of kind wake, and
+	// rides EventTalkootEnvelope.
+	EventTalkootWake = "talkoot_wake"
+	// EventTalkootRoutine carries a routine line (Talkoot.Line), on the
+	// room's address: a person approved, paused, resumed, or deleted a
+	// routine. A client re-reads the talkoot with talkoot.get.
+	EventTalkootRoutine = "talkoot_routine"
 	// EventTalkootAnswer carries a person's answer to a member's question, an
 	// answer line (Talkoot.Line), on the room's address. A member cites it as
 	// answer:<id>, and the line's Ref holds the id.

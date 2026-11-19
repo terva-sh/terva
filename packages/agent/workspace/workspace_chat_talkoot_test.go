@@ -397,6 +397,13 @@ func TestADroppedResolutionWithdrawsTheChatQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.waitOutbound(t, "the count of what was dropped", has("did not reach this chat"))
+	// ⚠️ The pump reads the inbox again after a drop, and the event that
+	// woke it can come before the card is gone. The question is then
+	// withdrawn a moment later, when the card's own event arrives. A message
+	// sent in between is taken as the answer, and the person reads that it
+	// was not used. So the test waits for the notice of the withdraw. A
+	// gate run on 2026-11-18 failed without this wait.
+	conn.waitOutbound(t, "the question to be withdrawn", has("that question is closed"))
 
 	conn.dm("2")
 	waitTalkoot(t, "the next message to enter the room as a post", func() bool {

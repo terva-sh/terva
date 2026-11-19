@@ -1,10 +1,11 @@
 import { t, tn } from '../../i18n'
 import type { TalkootAnswered, TalkootLine } from '../../platform/ctrlproto/types'
-import { HUMAN_PREFIX, isPerson, lineKey } from '../../platform/talkoot/store'
+import { HUMAN_PREFIX, isPerson, isRoutine, lineKey } from '../../platform/talkoot/store'
 import { clockTime } from '../formatting'
 import { Markdown } from '../Markdown'
 import { RefChip } from './RefChip'
 import { MarkOf } from './MemberMark'
+import { kindName, limitLabel, limitRows } from './routines'
 
 // who names a sender or a recipient: a member id, or a person's name without
 // its human: prefix.
@@ -21,6 +22,19 @@ const RECRUITER_PREFIX = 'recruiter:'
 
 // MANAGER_PREFIX marks the team manager as a proposer (talkoot.ManagerPrefix).
 const MANAGER_PREFIX = 'manager:'
+
+// dayTime writes an instant as the time of day on this device, with the date
+// in front when it is not today.
+export function dayTime(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const two = (n: number) => String(n).padStart(2, '0')
+  const time = `${two(d.getHours())}:${two(d.getMinutes())}`
+  const now = new Date()
+  const today = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  return today ? time : `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${time}`
+}
 
 // answerText is a person's answers, one per question.
 function answerText(answers: TalkootAnswered[]): string {
@@ -44,10 +58,22 @@ export function RoomLine({
     return (
       <article class={`talkoot-line envelope kind-${e.kind}${isPerson(e.from) ? ' from-person' : ''}`}>
         <header class="talkoot-line-head">
-          <MarkOf id={e.from} />
-          <strong>{who(e.from)}</strong>
-          <span class="talkoot-line-to">→ {e.to.map(who).join(', ')}</span>
-          {e.kind !== 'message' && <span class="talkoot-kind">{e.kind}</span>}
+          {/* A routine has no mark of its own. Its run works as its member. */}
+          <MarkOf id={isRoutine(e.from) ? (line.member ?? e.to[0]) : e.from} />
+          <strong>{isRoutine(e.from) ? t('A routine of %s', line.member ?? e.to[0] ?? '') : who(e.from)}</strong>
+          {/* A wake goes from a member to itself: terva sent it, at the time the member asked for. */}
+          {e.kind === 'wake' ? (
+            <span class="talkoot-kind">{t('woke itself')}</span>
+          ) : e.kind === 'run' ? (
+            // 🔑 A run is to nobody. terva started it at the routine's time,
+            // and its body is the prompt that a person approved.
+            <span class="talkoot-kind">{t('run, with no person present')}</span>
+          ) : (
+            <>
+              <span class="talkoot-line-to">→ {e.to.map(who).join(', ')}</span>
+              {e.kind !== 'message' && <span class="talkoot-kind">{e.kind}</span>}
+            </>
+          )}
           <time class="talkoot-time" dateTime={line.at}>
             {clockTime(line.at)}
           </time>
@@ -133,6 +159,56 @@ export function RoomLine({
       )
     case 'resume':
       return <div class="talkoot-line system">{t('%s resumed %s', who(line.by ?? ''), line.member || line.chain || t('the team'))}</div>
+    case 'wake':
+      switch (line.action) {
+        case 'set':
+          return (
+            <div class="talkoot-line system">
+              {t('%s set a wake for %s: %s', line.member ?? '', dayTime(line.due), line.text ?? '')}
+            </div>
+          )
+        case 'cancelled':
+          return <div class="talkoot-line system">{t('%s cancelled a wake of %s: %s', who(line.by ?? ''), line.member ?? '', line.text ?? '')}</div>
+        case 'dropped':
+          return (
+            <div class="talkoot-line system warn">
+              {t('A wake of %s did not fire (%s): %s', line.member ?? '', line.reason ?? '', line.text ?? '')}
+            </div>
+          )
+      }
+      return null
+    case 'routine': {
+      const by = who(line.by ?? '')
+      const member = line.member ?? ''
+      const why = line.reason ? `: ${line.reason}` : ''
+      switch (line.action) {
+        case 'approved': {
+          const r = line.routine
+          // 🔑 The card hid each limit that matched its default. The room
+          // shows them all, so a person can read what the approval gave.
+          return (
+            <div class="talkoot-line system">
+              {t('%s approved a %s routine of %s, %s', by, kindName(r?.kind ?? ''), member, r?.schedule ?? '')}
+              {r && ` (${limitRows(r.fields).map((row) => `${limitLabel(row.field)}: ${row.value}`).join('; ')})`}
+            </div>
+          )
+        }
+        case 'paused':
+          // A line with no person is terva's own pause, after a failed run.
+          if (!line.by) return <div class="talkoot-line system warn">{t('A routine of %s is paused', member) + why}</div>
+          return <div class="talkoot-line system">{t('%s paused a routine of %s', by, member) + why}</div>
+        case 'skipped':
+          return <div class="talkoot-line system">{t('A routine of %s started no run', member) + why}</div>
+        case 'ended':
+          return <div class="talkoot-line system">{t('A routine of %s ended', member) + why}</div>
+        case 'resumed':
+          return <div class="talkoot-line system">{t('%s resumed a routine of %s', by, member) + why}</div>
+        case 'deleted':
+          // The record of a routine that does not read names no member.
+          return <div class="talkoot-line system">{(member ? t('%s deleted a routine of %s', by, member) : t('%s deleted a routine whose record did not read', by)) + why}</div>
+      }
+      return null
+    }
     case 'damaged':
       return <div class="talkoot-line system warn">{t('A room line could not be read.')}</div>
   }

@@ -2,8 +2,6 @@ package config
 
 import (
 	"fmt"
-	"path"
-	"regexp"
 	"strings"
 	"time"
 
@@ -74,27 +72,6 @@ func TalkootChat() *TalkootChatConfig {
 	}
 	c := *cfg.TalkootChat
 	return &c
-}
-
-// TalkootChatProblem says why a talkoot_chat key that is set starts no
-// bridge. It is empty when the key is unset, and when TalkootChat returns
-// the key.
-//
-// 🚨 TalkootChat returns nil for an unset key and for a refused one alike.
-// A caller that reads it alone starts no bridge and says nothing, and the
-// person then waits on a bot that never answers.
-func TalkootChatProblem() string {
-	cfg, err := LoadConfig()
-	if err != nil || cfg.TalkootChat == nil {
-		return ""
-	}
-	if cfg.TalkootChat.Talkoot == "" {
-		return "talkoot_chat is set, and it names no talkoot"
-	}
-	if cfg.TalkootEnabled == nil || !*cfg.TalkootEnabled {
-		return "talkoot_chat is set, and talkoot_enabled is off"
-	}
-	return ""
 }
 
 // DefaultTalkootWakeDelay is the longest delay of a wake when the
@@ -203,15 +180,6 @@ type TalkootRoutinePolicy struct {
 	// routines are off too. A key with a problem in another field keeps the
 	// wait that it set.
 	QuestionWait time.Duration
-	// MergeCommands and ProtectedBranches add to the merge rule of a chain
-	// that no person began. As the wait, they have their values when
-	// routines are off, and beside a problem in another field.
-	MergeCommands     []*regexp.Regexp
-	ProtectedBranches []string
-	// ReviewCommands name the commands that ask for a model review. A chain
-	// of a routine counts each one against the routine's reviews for one
-	// day. They are kept as the merge rule's patterns are.
-	ReviewCommands []*regexp.Regexp
 	// Problem says why the key is set and routines are still off. It is
 	// empty when the key is unset, and when routines are on.
 	Problem string
@@ -260,42 +228,11 @@ func TalkootRoutines() TalkootRoutinePolicy {
 }
 
 func talkootRoutinePolicy(c TalkootRoutinesConfig) (p TalkootRoutinePolicy) {
-	// 🚨 The merge rule's patterns and the wait are read first, and they stay
-	// beside a problem in any other field. A chain of a routine can still
-	// work while the key turns routines off. A person who set a pattern or a
-	// short wait and then mistyped a limit must not lose either in silence.
-	// A pattern that does not compile turns routines off, and every pattern
-	// that does compile still binds a chain at work.
-	var merges, reviews []*regexp.Regexp
-	var branches []string
-	problem := ""
-	for _, pat := range c.MergeCommands {
-		re, err := regexp.Compile(pat)
-		if err != nil || strings.TrimSpace(pat) == "" {
-			problem = fmt.Sprintf("talkoot_routines.merge_commands holds %q, and it is not a pattern that compiles", pat)
-			continue
-		}
-		merges = append(merges, re)
-	}
-	for _, pat := range c.ProtectedBranches {
-		if _, err := path.Match(pat, ""); err != nil || strings.TrimSpace(pat) == "" {
-			problem = fmt.Sprintf("talkoot_routines.protected_branches holds %q, and it is not a branch name or a pattern such as release/*", pat)
-			continue
-		}
-		branches = append(branches, pat)
-	}
-	for _, pat := range c.ReviewCommands {
-		re, err := regexp.Compile(pat)
-		if err != nil || strings.TrimSpace(pat) == "" {
-			problem = fmt.Sprintf("talkoot_routines.review_commands holds %q, and it is not a pattern that compiles", pat)
-			continue
-		}
-		reviews = append(reviews, re)
-	}
+	// 🚨 The wait is read first, and it stays beside a problem in any other
+	// field. A chain of a routine can still work while the key turns
+	// routines off. A person who set a short wait and then mistyped a limit
+	// must not get the default wait in silence.
 	wait := DefaultTalkootQuestionWait
-	defer func() {
-		p.QuestionWait, p.MergeCommands, p.ProtectedBranches, p.ReviewCommands = wait, merges, branches, reviews
-	}()
 	if c.QuestionWait != "" {
 		d, err := time.ParseDuration(c.QuestionWait)
 		if err != nil || d < MinTalkootQuestionWait || d > MaxTalkootQuestionWait {
@@ -303,9 +240,7 @@ func talkootRoutinePolicy(c TalkootRoutinesConfig) (p TalkootRoutinePolicy) {
 		}
 		wait = d
 	}
-	if problem != "" {
-		return TalkootRoutinePolicy{Problem: problem}
-	}
+	defer func() { p.QuestionWait = wait }()
 	if c.Max < 1 {
 		return TalkootRoutinePolicy{Problem: fmt.Sprintf("talkoot_routines.max is %d, and routines need 1 or more", c.Max)}
 	}

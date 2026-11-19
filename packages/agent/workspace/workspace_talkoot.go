@@ -87,6 +87,12 @@ type wsTalkoot struct {
 	// closing is set when closeTalkoots takes the runs. No member turn opens
 	// after it.
 	closing bool
+	// loaded is set once LoadTalkoots started the teams homed here. The
+	// handler for the wakes waits for it (workspace_talkoot_wakes.go).
+	loaded atomic.Bool
+	// wakeMu makes one member wake at a time read the open wakes and set its
+	// own, so two calls cannot both pass the cap.
+	wakeMu sync.Mutex
 	// turns counts member turns that have not reported their cost yet, so
 	// Close can wait for them. A counter, not a WaitGroup: a turn can start
 	// while Close waits, and a WaitGroup forbids that.
@@ -113,7 +119,15 @@ type seatBinding struct {
 	// raised it already answered the person in its own words, so its final
 	// prose is not mirrored too (talkootTurn).
 	personSends atomic.Uint64
+	// routine is set for the session of a routine's run, and nil for the
+	// member's own session (workspace_talkoot_runs.go). The run works with
+	// the member's posture, directory and tools list. It speaks to nobody:
+	// each call that sends, proposes or sets a wake refuses a seat with it.
+	routine *routineRun
 }
+
+// errRunSeat refuses a call that a routine's run may not make.
+var errRunSeat = errors.New("a routine's run speaks to nobody but its own member. Write what the team needs to know in your last message")
 
 // revoke stops the binding. It waits for a call in flight to finish.
 func (b *seatBinding) revoke() {
@@ -160,6 +174,12 @@ func (s talkootSeat) send(o talkoot.Outgoing) (talkoot.Envelope, error) {
 	defer s.b.mu.RUnlock()
 	if s.b.revoked {
 		return talkoot.Envelope{}, errSeatRevoked
+	}
+	// 🚨 The run has no tool that sends. This test holds when a tool from
+	// before a rebuild, or a path that a later change adds, reaches a run's
+	// seat anyway.
+	if s.b.routine != nil {
+		return talkoot.Envelope{}, errRunSeat
 	}
 	var e talkoot.Envelope
 	err := s.b.run.do(func(rt *talkoot.Router) (err error) {
@@ -395,7 +415,8 @@ func (w *Workspace) talkootActivity(sessID, callID, tool string) {
 	}
 	b := w.talkoot.seats[sessID]
 	w.talkoot.mu.Unlock()
-	if b == nil {
+	// A run is no turn of its member, so its tool calls are not the member's.
+	if b == nil || b.routine != nil {
 		return
 	}
 	if !b.mu.TryRLock() {
@@ -416,10 +437,15 @@ func (w *Workspace) talkootActivity(sessID, callID, tool string) {
 }
 
 // talkootTurn opens a seated session's turn and captures its end and reply
-// callbacks. The reply callback runs only after a successful generation,
-// before the session releases its turn slot. The end reports cost, failure,
-// and interruption. Close waits for every open turn to end. An unseated
-// session gets nil callbacks.
+// callbacks. The reply callback runs only after a successful generation that
+// produced a reply, before the session releases its turn slot. Its second
+// argument says whether one delivery opened the turn. The end reports cost,
+// failure, and interruption, and its last argument says whether the turn was
+// cancelled for any cause. Close waits for every open turn to end. An
+// unseated session gets nil callbacks.
+//
+// The session of a routine's run gets the run's callbacks instead
+// (workspace_talkoot_runs.go). Its turn is no turn of the member's.
 //
 // The run counts the member's open turns apart from its roster, so shutdown
 // finds a turn whose member an update removed. The count drops inside the
@@ -430,7 +456,9 @@ func (w *Workspace) talkootActivity(sessID, callID, tool string) {
 // w.talkoot.mu, which closeTalkoots also holds to set closing. A turn is
 // either counted before the talkoots close, or refused with closing true, and
 // then the caller does not run it: no report of it could reach a closed run.
-func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bool, failed string, interrupted bool), publish func(string), closing bool) {
+// The session of a run is refused the same way once its run ended, or once a
+// roster update changed its member.
+func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bool, failed string, interrupted, stopped bool), publish func(body string, delivered bool), closing bool) {
 	w.talkoot.mu.Lock()
 	b := w.talkoot.seats[sessID]
 	if b == nil {
@@ -440,6 +468,24 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 	if w.talkoot.closing {
 		w.talkoot.mu.Unlock()
 		return nil, nil, true
+	}
+	if b.routine != nil {
+		// 🚨 A run is one turn. A second turn in its session, queued before
+		// the session closes, would work as the member with no run to count
+		// its cost. A turn of a run whose member a roster update changed
+		// would work with the posture and the directory that the update took
+		// away. Neither turn runs, and the second case ends the run here,
+		// because no turn of it will.
+		if b.routine.ended.Load() || b.retired.Load() {
+			w.talkoot.mu.Unlock()
+			w.endRunOnce(sessID, b, talkoot.RunEnd{Interrupted: true})
+			return nil, nil, true
+		}
+		b.routine.opened.Store(true)
+		w.talkoot.turns.Add(1)
+		w.talkoot.mu.Unlock()
+		end, publish = w.runTurn(sessID, b)
+		return end, publish, false
 	}
 	seat, run, member := talkootSeat{b: b, w: w}, b.run, b.member
 	if run.open == nil {
@@ -453,7 +499,14 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 	run.nativeTurn(member, 1)
 	run.flush()
 	sentBefore := b.personSends.Load()
-	publish = func(body string) {
+	publish = func(body string, delivered bool) {
+		// 🚨 A seat alone does not make a turn Talkoot work. A person can type
+		// into a member's session directly, and that answer is private. Only a
+		// turn that one delivery started may publish its final reply to the
+		// room. A private turn that drains a delivery partway stays private.
+		if !delivered {
+			return
+		}
 		// 🚨 A turn that already messaged a person would post twice: once in
 		// its chosen words and again as its final prose, which the body
 		// dedupe misses whenever the two differ.
@@ -464,7 +517,7 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 			w.diagf("talkoot: session %s could not publish its reply: %v", sessID, err)
 		}
 	}
-	return func(costUSD float64, ran bool, failed string, interrupted bool) {
+	return func(costUSD float64, ran bool, failed string, interrupted, _ bool) {
 		defer w.talkoot.turns.Add(-1)
 		done := false
 		settle := func() {

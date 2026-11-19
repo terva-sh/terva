@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -93,6 +94,12 @@ func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr permission.Con
 
 	asked := time.Now()
 	s.broadcast(ctrlproto.PermissionEvent(req))
+	// 🚨 A turn in a chain that a routine began may have no person to ask, so
+	// its card has a deadline (decision 0029 rule 12). Nobody approved the
+	// call, so it does not run, and the chain ends.
+	lone, unattended := s.unattended()
+	due, free := lone.deadline(unattended)
+	defer free()
 
 	select {
 	case d := <-ch:
@@ -101,6 +108,9 @@ func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr permission.Con
 		s.recordPermission(req, d, asked)
 		outcome = permissionOutcome(d)
 		return d
+	case <-due:
+		outcome = talkoot.OutcomeExpired
+		return permission.ConfirmDecision{Allow: false, Reason: lone.expired("an approval of a call of " + cr.Tool)}
 	case <-ctx.Done():
 		// Cancelled (client cancel / shutdown): fail closed.
 		return permission.ConfirmDecision{Allow: false, Reason: "cancelled"}
@@ -235,8 +245,17 @@ func (a *webAsker) ask(ctx context.Context, qs []core.UserQuestion) ([]core.User
 
 	asked := time.Now()
 	s.broadcast(ctrlproto.AskEvent(req))
+	// 🚨 The deadline of a turn that no person began, as for an approval
+	// (ConfirmWithRequest). No answer is made up for the person: the tool
+	// call fails, and the text says that nobody answered.
+	lone, unattended := s.unattended()
+	due, free := lone.deadline(unattended)
+	defer free()
 
 	select {
+	case <-due:
+		outcome = talkoot.OutcomeExpired
+		return core.PadAnswers(nil, len(qs)), errors.New(lone.expired(askedText(qs)))
 	case ans := <-ch:
 		// A client is free to send a short set (an older one answers only
 		// the first question); the Asker contract to core is one answer

@@ -25,7 +25,8 @@ const (
 	ApprovalPlan ApprovalMode = "plan"
 	// ApprovalAsk prompts for every tool call, read-only included:
 	// it is the exact posture --no-yolo always had, kept bit-for-bit
-	// so that flag can alias to it.
+	// so that flag can alias to it. A policy's Interactive and AskKeeps
+	// name the calls that go to the person, and those do not prompt.
 	ApprovalAsk ApprovalMode = "ask"
 	// ApprovalAutoEdit auto-allows read-only tools and the file
 	// editors (write/edit) and prompts for everything else — the
@@ -217,6 +218,12 @@ func argsMatchTexts(args json.RawMessage) []string {
 	return out
 }
 
+// askKeeps reports a call that AskKeeps names. A policy with no AskKeeps
+// keeps none.
+func (p *PermissionPolicy) askKeeps(toolName string, args json.RawMessage) bool {
+	return p.AskKeeps != nil && p.AskKeeps(toolName, args)
+}
+
 // PolicyVerdict is the outcome of evaluating a call against the
 // policy, before any session memory or interactive prompt is
 // consulted.
@@ -278,6 +285,14 @@ type PermissionPolicy struct {
 	// stops them. Plan never prompts, so with no rule a kept tool runs
 	// without an approval. Static, set at construction.
 	PlanKeeps map[string]bool
+	// AskKeeps, when set, reports a call that ask and auto-edit run with no
+	// prompt. It is for a call whose only effect is to put something before
+	// the person: a request that the person must still approve, or a message
+	// to the person. A prompt for it asks the person whether they may be
+	// asked. Like PlanKeeps, it gets no free pass: a deny or ask rule still
+	// stops the call. It reads the arguments, because one tool can reach the
+	// person or another party.
+	AskKeeps func(toolName string, args json.RawMessage) bool
 	// DecomposeCommand, when set, splits a single tool call into the
 	// sequence of distinct command scopes it will run, returning one
 	// synthetic args object per scope. A compound shell command like
@@ -391,7 +406,11 @@ func (p *PermissionPolicy) evalRulesAndDefault(toolName string, args json.RawMes
 			return VerdictAllow, ""
 		}
 	case ApprovalAutoEdit:
-		if p.ReadOnly.Has(toolName) || p.EditTools[toolName] {
+		if p.ReadOnly.Has(toolName) || p.EditTools[toolName] || p.askKeeps(toolName, args) {
+			return VerdictAllow, ""
+		}
+	case ApprovalAsk:
+		if p.askKeeps(toolName, args) {
 			return VerdictAllow, ""
 		}
 	case ApprovalPlan:

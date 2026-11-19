@@ -381,7 +381,11 @@ func (p *chatTeamPump) enqueue(ev talkootEvent) {
 		p.teamIs(talkoot.TeamState(ev.Status))
 		return
 	}
-	if ev.Kind != "envelope" && ev.Kind != "inbox" {
+	// Of a routine's lines the chat acts on one: a pause that no person
+	// made. The rest never enter the queue, so a routine that skips at each
+	// of its times cannot fill it.
+	selfPause := ev.Kind == "routine" && ev.Line != nil && ev.Line.Action == talkoot.ActionPaused && ev.Line.By == ""
+	if ev.Kind != "envelope" && ev.Kind != "inbox" && !selfPause {
 		return
 	}
 	p.mu.Lock()
@@ -575,6 +579,10 @@ func (p *chatTeamPump) handle(ctx context.Context, ev talkootEvent) {
 		if ev.Line != nil && ev.Line.Envelope != nil {
 			p.envelope(ctx, *ev.Line.Envelope)
 		}
+	case "routine":
+		if ev.Line != nil {
+			p.routine(ctx, *ev.Line)
+		}
 	case "inbox":
 		if ev.Wire == nil || ev.Wire.Talkoot == nil || ev.Wire.Talkoot.Card == nil {
 			return
@@ -609,6 +617,10 @@ func (p *chatTeamPump) envelope(ctx context.Context, e talkoot.Envelope) {
 		}
 		return
 	}
+	if talkoot.IsUnansweredNote(e) {
+		p.unanswered(ctx, e)
+		return
+	}
 	if !slices.Contains(e.To, me) {
 		return
 	}
@@ -623,6 +635,64 @@ func (p *chatTeamPump) envelope(ctx context.Context, e talkoot.Envelope) {
 		}
 	}
 	p.send(p.host.policy().memberSaid(chatNow(), e.ID, e.Chain.Root, speaker, body))
+}
+
+// approvedByMe reports whether the bridge's person approved the routine, and
+// returns the routine's member.
+//
+// 🚨 A routine's notes go to the person who approved it, and to nobody else
+// (TKT-01M7QFVHC). Another person's routine is that person's to resume. A
+// routine that does not read, or that a person deleted, names nobody.
+func (p *chatTeamPump) approvedByMe(ctx context.Context, routine string) (member string, mine bool) {
+	v, err := p.w.Talkoot(ctx, ctrlproto.TalkootRef{ID: p.id})
+	if err != nil || v.Routines == nil {
+		return "", false
+	}
+	for _, r := range v.Routines.Routines {
+		if r.ID == routine {
+			return r.Member, r.ApprovedBy == talkoot.HumanPrefix+p.host.person
+		}
+	}
+	return "", false
+}
+
+// routine tells the person that a routine paused itself. A run that failed
+// pauses its routine, and so does a run that passed the routine's daily
+// spend limit. The routine then starts no run until a person resumes it.
+//
+// 🔑 It goes out at once, in quiet hours too. A question that nobody hears
+// parks one turn. A routine that nobody knows is paused does nothing at each
+// of its times, for as long as nobody looks (decision 0029 rule 22).
+//
+// A pause that a person made has that person's name on its line, and the
+// chat says nothing of it: the person knows.
+func (p *chatTeamPump) routine(ctx context.Context, l talkoot.Line) {
+	if l.Action != talkoot.ActionPaused || l.By != "" {
+		return
+	}
+	member, mine := p.approvedByMe(ctx, l.Ref)
+	if !mine {
+		return
+	}
+	p.b.Say("", i18n.T("a routine of %s paused itself: %s. it starts no run until you resume it in the Talkoot app.", member, l.Reason))
+}
+
+// unanswered puts a run's note into the next brief: the run ended at a
+// question that nobody answered. The chat already said that the question
+// closed. The note holds the question and what the run left undone.
+func (p *chatTeamPump) unanswered(ctx context.Context, e talkoot.Envelope) {
+	member, mine := p.approvedByMe(ctx, strings.TrimPrefix(e.From, talkoot.RoutinePrefix))
+	if !mine {
+		return
+	}
+	// The question goes first. A held text is cut at its limit, and the
+	// question is what the person must read.
+	asked, left := talkoot.UnansweredNoteParts(e)
+	text := i18n.T("a run of a routine of %s ended at a question that nobody answered: %s", member, asked)
+	if left != "" {
+		text += i18n.T(" what the run left: %s", left)
+	}
+	p.host.policy().forBrief(chatNow(), e.ID, text)
 }
 
 // card poses an ask in chat, and names any other card as waiting in the app.
@@ -644,7 +714,14 @@ func (p *chatTeamPump) card(ctx context.Context, c ctrlproto.TalkootCard) {
 	case ctrlproto.TalkootCardPermission:
 		p.b.Say("", i18n.T("%s waits for an approval. open the Talkoot app to decide.", c.Member))
 	case ctrlproto.TalkootCardProposal:
-		p.send(p.host.policy().notice(now, c.ID, outDecision, i18n.T("%s proposed a change to the team. open the Talkoot app to decide.", c.Member)))
+		text := i18n.T("%s proposed a change to the team. open the Talkoot app to decide.", c.Member)
+		if c.Proposal != nil && c.Proposal.Routine != nil {
+			// 🔑 A routine's approval is a grant, and chat cannot tell a
+			// verified device from another yet (decision 0029 rule 21). So
+			// the chat names the card, and the app decides it.
+			text = i18n.T("%s asks for a routine. open the Talkoot app to decide.", c.Member)
+		}
+		p.send(p.host.policy().notice(now, c.ID, outDecision, text))
 	case ctrlproto.TalkootCardKickoff:
 		p.send(p.host.policy().notice(now, c.ID, outDecision, i18n.T("the team waits for its kickoff. open the Talkoot app to start it.")))
 	}
@@ -688,7 +765,8 @@ func (p *chatTeamPump) pose(ctx context.Context, c ctrlproto.TalkootCard) {
 		// Whoever removes the entry owns the outcome. resolved removes it when
 		// the card closed somewhere else, and then this goroutine says so and
 		// answers nothing. A card closes when a person answers it in the app,
-		// and also when the member's turn ends, so the notice names neither.
+		// when the member's turn ends, and when its deadline passes in a
+		// chain that a routine began. So the notice names all three.
 		p.mu.Lock()
 		_, mine := p.asks[c.ID]
 		delete(p.asks, c.ID)
@@ -702,7 +780,7 @@ func (p *chatTeamPump) pose(ctx context.Context, c ctrlproto.TalkootCard) {
 				p.b.Say("", i18n.T("that question was already settled, so your answer was not used."))
 			}
 		case !mine && posed && ctx.Err() == nil:
-			p.b.Say("", i18n.T("that question is closed. it was answered in the Talkoot app, or the member's turn ended."))
+			p.b.Say("", i18n.T("that question is closed. it was answered in the Talkoot app, the member's turn ended, or its deadline passed."))
 		case errors.Is(err, chat.ErrAskSkipped):
 			p.b.Say("", i18n.T("left for the Talkoot app."))
 		}

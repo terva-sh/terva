@@ -77,6 +77,9 @@ describe('card notices', () => {
 
   it('a kickoff card names no member', () => {
     expect(noticeLine({ session: '', member: '', kind: 'kickoff', id: 'kickoff' })).toBe('The team waits for you to start the introductions')
+    const routine = { kind: 'task', schedule: 'every 15m', prompt: 'Check CI with the secret token.' }
+    const line = noticeLine({ session: '', member: 'helm', kind: 'proposal', id: 'p1', proposal: { routine } as never })
+    expect(line).toBe('helm asks for a routine')
   })
 })
 

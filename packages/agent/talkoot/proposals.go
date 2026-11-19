@@ -84,6 +84,9 @@ type Proposal struct {
 	// library, byte for byte as the card showed it, before the roster
 	// changes. Only a recruiter's proposal carries one.
 	Persona *PersonaDraft `json:"persona,omitempty"`
+	// Routine is set on a proposal that asks for a routine and changes no
+	// roster. Ops, Base and Changes are then empty (routine.go).
+	Routine *RoutineAsk `json:"routine,omitempty"`
 }
 
 // MaxPersonaDraftBytes bounds a drafted persona file. A built-in charter runs

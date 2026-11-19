@@ -130,8 +130,28 @@ var (
 type chainState struct {
 	// human and thread come only from the sealed root post, never from a send.
 	human, thread string
-	hops          int
-	allowance     int // hops allowed before the chain pauses; a resume adds HopLimit
+	// routine is the id of the routine whose run is the root (run.go), and
+	// person is the person who approved that routine. human stays empty for
+	// such a chain: no person started it.
+	routine, person string
+	hops            int
+	allowance       int // hops allowed before the chain pauses; a resume adds HopLimit
+}
+
+// rooted reports whether a member may send in the chain: a person's post or
+// a routine's run is at its root.
+func (cs *chainState) rooted() bool { return cs != nil && (cs.human != "" || cs.routine != "") }
+
+// replyTo is the person that the alias human names in the chain: the person
+// at its root, or the person who approved the routine at its root.
+func (cs *chainState) replyTo() string {
+	if cs == nil {
+		return ""
+	}
+	if cs.human != "" {
+		return cs.human
+	}
+	return cs.person
 }
 
 type pending struct {
@@ -215,6 +235,23 @@ type Router struct {
 	held    []pending
 	notes   map[string][]string  // member -> rendered notes for its next turn
 	refused map[string]time.Time // member and guard -> when its last refusal line was written
+	// wakesClosed holds the id of each wake that fired, was dropped, or was
+	// cancelled, so a second delivery of one firing sends nothing (wake.go).
+	wakesClosed map[string]bool
+	// hopPauseOwed holds each chain whose hop pause is set in this process and
+	// is not in the room, because its line was not written (wake.go).
+	hopPauseOwed map[string]bool
+	// runs holds each routine's run by the root of its chain (run.go).
+	runs map[string]*runState
+	// routineSpend holds what the runs of each routine spent today, by the
+	// routine's id. It rolls with the day, as spend does.
+	routineSpend map[string]float64
+	// routineReviews holds how many reviews the chains of each routine
+	// asked for today, by the routine's id (review.go). It rolls with the
+	// day, as routineSpend does.
+	routineReviews map[string]int
+	// runWakes holds each open follow-up of a run by the wake's id.
+	runWakes map[string]runWake
 	// answers holds every person's answer in the room by its id, for the
 	// answer: references a send cites.
 	answers map[string]Citation
@@ -244,7 +281,13 @@ func NewRouter(r Roster, room *Room, d Drivers, l Limits, now func() time.Time) 
 		pauses: pauses{},
 		sends:  map[string][]time.Time{}, recent: map[string]time.Time{},
 		notes: map[string][]string{}, refused: map[string]time.Time{}, owed: map[string]int{},
-		answers: map[string]Citation{}, replyBodies: map[string]time.Time{},
+		wakesClosed:    map[string]bool{},
+		hopPauseOwed:   map[string]bool{},
+		runs:           map[string]*runState{},
+		routineSpend:   map[string]float64{},
+		routineReviews: map[string]int{},
+		runWakes:       map[string]runWake{},
+		answers:        map[string]Citation{}, replyBodies: map[string]time.Time{},
 	}
 	rt.day = rt.dayOf(now())
 	lines, err := room.Read()
@@ -302,7 +345,12 @@ func (rt *Router) settleOwed(ref, member string) {
 	}
 }
 
-func (rt *Router) dayOf(t time.Time) string { return t.In(rt.now().Location()).Format(time.DateOnly) }
+func (rt *Router) dayOf(t time.Time) string { return dayIn(t, rt.now().Location()) }
+
+// dayIn names the day of t in loc. The daily counters roll on it (roll), and
+// a run reads its spend of the day through it (Run.SpentAt), so the two never
+// name one moment as two days.
+func dayIn(t time.Time, loc *time.Location) string { return t.In(loc).Format(time.DateOnly) }
 
 // roll resets the daily counters when the day changes. Pauses stay: only a
 // person resumes.
@@ -312,6 +360,8 @@ func (rt *Router) roll(now time.Time) {
 		rt.spend = map[string]float64{}
 		rt.turns = map[string]int{}
 		rt.teamSpend = 0
+		rt.routineSpend = map[string]float64{}
+		rt.routineReviews = map[string]int{}
 	}
 }
 
@@ -332,8 +382,25 @@ func (rt *Router) replay(l Line) {
 			return
 		}
 		rt.rootLocked(*e)
+		if routine, ok := strings.CutPrefix(e.From, RoutinePrefix); ok && e.Kind == KindRun && e.ID == e.Chain.Root {
+			// The line of a run's root names its member, its session and
+			// the person who approved the routine. A root that answers a
+			// wake is a follow-up, and the wake holds its number.
+			run := Run{ID: e.ID, Routine: routine, Member: l.Member, Session: l.Ref, At: e.At}
+			if rw, ok := rt.runWakes[e.ReplyTo]; ok && rw.routine == routine {
+				run.Follow = rw.follow
+				rt.wakesClosed[e.ReplyTo] = true
+				delete(rt.runWakes, e.ReplyTo)
+			}
+			rt.runRootLocked(run, l.By)
+		}
 		cs := rt.chain(e.Chain.Root)
 		cs.hops = max(cs.hops, e.Chain.Hops)
+		if e.Kind == KindWake {
+			// The host's timer delivers a firing at least once. The envelope
+			// in the room is the proof that this wake fired.
+			rt.wakesClosed[e.ID] = true
+		}
 		// A note waits in its recipient's buffer until a delivery line
 		// says how many notes a delivery carried. A waking envelope is owed
 		// to each recipient until its delivery line or failed-delivery line.
@@ -348,7 +415,8 @@ func (rt *Router) replay(l Line) {
 			rt.owed[owedKey(e.ID, to)] = len(rt.held)
 			rt.held = append(rt.held, pending{env: *e, to: to})
 		}
-		if !strings.HasPrefix(e.From, HumanPrefix) && !IsSessionProposer(e.From) {
+		// A wake is the router's own envelope, so it is no send of its member.
+		if !strings.HasPrefix(e.From, HumanPrefix) && !IsSessionProposer(e.From) && !IsRoutineActor(e.From) && e.Kind != KindWake {
 			// Only the envelopes still inside a window matter to a guard, so
 			// replay loads no more than those.
 			if rt.now().Sub(e.At) < rt.limits.SendWindow {
@@ -361,7 +429,31 @@ func (rt *Router) replay(l Line) {
 				}
 			}
 		}
+	case LineReview:
+		// The count of today is in the room, so a restart does not give a
+		// routine its reviews again.
+		if rt.dayOf(l.At) == rt.day {
+			rt.routineReviews[strings.TrimPrefix(l.Ref, RoutinePrefix)] += l.Count
+		}
 	case LineTurn:
+		if IsRoutineActor(l.Ref) {
+			// 🚨 A run's turn line is the member's spend and nothing else of
+			// the member. The run was a session apart, so the line moves no
+			// chain of the member, and a failed run pauses no member.
+			delete(rt.runs, l.Chain)
+			if rt.dayOf(l.At) == rt.day {
+				m, ok := rt.roster.member(l.Member)
+				if !ok {
+					m = Member{ID: l.Member}
+				}
+				rt.routineSpend[strings.TrimPrefix(l.Ref, RoutinePrefix)] += l.CostUSD
+				rt.spend[l.Member] += l.CostUSD
+				rt.turns[l.Member]++
+				rt.teamSpend += l.CostUSD
+				rt.capTrips(m, turnHold{})
+			}
+			return
+		}
 		// The turn line names the chain the member worked in. An envelope
 		// line cannot: a held or failed delivery never reached the member,
 		// and replay must not hand it a chain it never saw.
@@ -424,6 +516,14 @@ func (rt *Router) replay(l Line) {
 		}
 	case LineIntro:
 		rt.cardLocked(l)
+	case LineWake:
+		if l.Action != WakeSet {
+			rt.wakesClosed[l.Ref] = true
+			delete(rt.runWakes, l.Ref)
+		} else if st := rt.runs[l.Chain]; st != nil {
+			// A wake in the chain of a run at work is that run's follow-up.
+			rt.runWakeSetLocked(st, l.Ref)
+		}
 	case LineToolError, LineRetry, LineCardOpen, LineCardClose:
 		// A signal rebuilds nothing here. A reader of the room replays it
 		// (signals.go).
@@ -480,6 +580,7 @@ func (rt *Router) resumeLocked(member, chain string, personOnly bool) {
 	}
 	rt.pauses.clear(scope)
 	if chain != "" {
+		delete(rt.hopPauseOwed, chain)
 		// A resumed chain gets another full allowance. Without it, the next
 		// send would trip the same limit at once.
 		cs := rt.chain(chain)
@@ -544,14 +645,11 @@ func (rt *Router) Send(from string, o Outgoing) (Envelope, error) {
 	rt.mu.Lock()
 	// Resolve aliases under the same lock that chooses the active chain.
 	// A queued post grants no identity until the member reads it.
-	human := ""
-	if cs := rt.chains[rt.active[from]]; cs != nil {
-		human = cs.human
-	}
+	human := rt.chains[rt.active[from]].replyTo()
 	o.To = slices.Clone(o.To)
 	for i, to := range o.To {
 		if _, member := rt.roster.member(to); !member && human != "" &&
-			(to == "human" || to == strings.TrimPrefix(human, HumanPrefix)) {
+			(to == PersonWord || to == strings.TrimPrefix(human, HumanPrefix)) {
 			o.To[i] = human
 		}
 	}
@@ -684,11 +782,13 @@ func (rt *Router) sendHopLocked(from string, o Outgoing, now time.Time, hop bool
 	}
 
 	root := rt.active[from]
-	if root == "" || rt.chain(root).human == "" {
+	if root == "" || !rt.chain(root).rooted() {
 		return guard(GuardHumanRoot, ActionRefused, "no human post at the root of the chain", "", ErrNoHumanRoot)
 	}
 	cs := rt.chain(root)
-	if why := rt.pausedWhy(from, root); why != "" {
+	// 🔑 One send passes one pause: a word to the person, in a chain that
+	// ended at a question nobody answered (unanswered.go).
+	if why := rt.pausedWhy(from, root); why != "" && !rt.leftWordLocked(from, root, o) {
 		return Envelope{}, nil, fmt.Errorf("%w (%s)", ErrPaused, why)
 	}
 
@@ -709,9 +809,11 @@ func (rt *Router) sendHopLocked(from string, o Outgoing, now time.Time, hop bool
 		hops++
 	}
 	if hop && hops > cs.allowance {
-		reason := fmt.Sprintf("the chain reached %d hops", cs.hops)
-		rt.pauses.set(chainScope(root), pauseGuard, reason)
-		return guard(GuardHops, ActionPaused, reason, root, fmt.Errorf("%w (this chain: %s)", ErrPaused, reason))
+		reason, err := rt.pauseAtHopsLocked(root, now)
+		if err != nil {
+			return Envelope{}, nil, err
+		}
+		return Envelope{}, nil, fmt.Errorf("%w (this chain: %s)", ErrPaused, reason)
 	}
 
 	// A proposal has no recipient to drop a duplicate for. The rate limit
@@ -846,6 +948,20 @@ func (rt *Router) routeLocked(e Envelope, to string, retry bool) []delivery {
 	}
 	if rt.blockedLocked(e, to) {
 		rt.held = append(rt.held, pending{env: e, to: to})
+		return nil
+	}
+	// 🚨 A run works in its member's directory and holds no working slot.
+	// For a member with a checkout of its own, a delivery waits until the
+	// run ends, so the member's turn and the run do not work in one checkout
+	// at one time (TKT-01M7Q6SX). EndRun releases it. A turn that a person
+	// types into the member's session does not come this way, and it still
+	// starts.
+	if m.OwnCheckout() && rt.runOfLocked(to) {
+		rt.held = append(rt.held, pending{env: e, to: to})
+		if !retry {
+			rt.record(Line{Type: LineGuard, At: rt.now(), Guard: GuardWorking, Action: ActionQueued,
+				Member: to, Reason: "a run of a routine of " + to + " works in its checkout", Ref: e.ID})
+		}
 		return nil
 	}
 	if !rt.busy(to) && rt.workingCount() >= rt.limits.MaxWorking {

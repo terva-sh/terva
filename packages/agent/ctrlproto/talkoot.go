@@ -57,6 +57,12 @@ type TalkootController interface {
 	PauseTalkoot(ctx context.Context, p TalkootPauseParams) error
 	// ResumeTalkoot lifts a pause, and releases the deliveries it held.
 	ResumeTalkoot(ctx context.Context, p TalkootResumeParams) error
+	// CancelTalkootWake cancels one open wake, so its member gets no turn
+	// from it.
+	CancelTalkootWake(ctx context.Context, p TalkootWakeCancelParams) error
+	// SetTalkootRoutine pauses, resumes or deletes one routine, and returns
+	// the routines as they then are.
+	SetTalkootRoutine(ctx context.Context, p TalkootRoutineSetParams) (TalkootRoutines, error)
 	// TalkootInbox returns every question and approval that a member of the
 	// talkoot waits on, oldest first. A client answers a card with approve or
 	// answer on the card's session. The inbox has no answer verb of its own.
@@ -182,6 +188,14 @@ type TalkootView struct {
 	// one: the connector, its state, and the account it paired with. It is
 	// unset when no bridge serves the team.
 	Chat *ChatBridgeState `json:"chat,omitempty"`
+	// Wakes is the state of member wakes: whether a member may set one, the
+	// person's caps, and the open ones. It is unset when the person set no
+	// policy and the team has no open wake.
+	Wakes *TalkootWakes `json:"wakes,omitempty"`
+	// Routines is the state of routines: whether a member may ask for one,
+	// the cap, and every routine of the team. It is unset when the person
+	// set no policy and the team has no routine.
+	Routines *TalkootRoutines `json:"routines,omitempty"`
 }
 
 // TalkootMember is one member: what the roster says, and what the router
@@ -495,6 +509,160 @@ type TalkootResumeParams struct {
 	Chain  string `json:"chain,omitempty"`
 }
 
+// TalkootWakeCancelParams names one open wake of a talkoot, and the person
+// who cancels it.
+type TalkootWakeCancelParams struct {
+	ID   string `json:"id"`
+	By   string `json:"by"`
+	Wake string `json:"wake"`
+}
+
+// TalkootWakes is the state of wakes for one talkoot. A wake is one follow-up
+// turn that a member sets for itself, inside work that a person started
+// (decision 0029 rules 4 and 9).
+type TalkootWakes struct {
+	// On says that a member may set a wake now. PerMember and MaxDelay are
+	// the person's caps: the open wakes of one member, and the longest delay
+	// as a duration such as 24h.
+	On        bool   `json:"on"`
+	PerMember int    `json:"per_member,omitempty"`
+	MaxDelay  string `json:"max_delay,omitempty"`
+	// Problem says why the talkoot_wakes key is set and wakes are still off.
+	Problem string `json:"problem,omitempty"`
+	// Open lists the wakes that have not fired, the soonest first.
+	Open []TalkootWake `json:"open,omitempty"`
+}
+
+// TalkootWake is one open wake. ID is also the id of the envelope that the
+// firing sends, and the Ref of the room's wake lines.
+type TalkootWake struct {
+	ID     string    `json:"id"`
+	Member string    `json:"member"`
+	Chain  string    `json:"chain,omitempty"`
+	Reason string    `json:"reason"`
+	Set    time.Time `json:"set,omitzero"`
+	Due    time.Time `json:"due"`
+	// Routine is set for the follow-up of a routine's run. Its firing starts
+	// one more run of that routine, and gives the member's own session no
+	// turn.
+	Routine string `json:"routine,omitempty"`
+}
+
+// The actions of talkoot.routine_set.
+const (
+	TalkootRoutinePause  = "pause"
+	TalkootRoutineResume = "resume"
+	TalkootRoutineDelete = "delete"
+)
+
+// TalkootRoutineSetParams names one routine of a talkoot, what to do with
+// it, and the person who does it. Reason is optional, and the room records
+// it.
+type TalkootRoutineSetParams struct {
+	ID      string `json:"id"`
+	By      string `json:"by"`
+	Routine string `json:"routine"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// TalkootRoutines is the state of routines for one talkoot. A routine is a
+// recurring timer that a person approved from its card (decision 0029 rules
+// 4 and 5).
+type TalkootRoutines struct {
+	// On says that a member may ask for a routine now, and Max is the
+	// person's cap on the routines of one talkoot.
+	On  bool `json:"on"`
+	Max int  `json:"max,omitempty"`
+	// Problem says why the talkoot_routines key is set and routines are
+	// still off.
+	Problem string `json:"problem,omitempty"`
+	// Routines lists every routine, the paused ones included, oldest first.
+	Routines []TalkootRoutine `json:"routines,omitempty"`
+}
+
+// TalkootRoutineFields are the six limits of a routine. A zero end means
+// that the routine has no end of that kind.
+type TalkootRoutineFields struct {
+	EndAfterRuns   int     `json:"end_after_runs"`
+	EndAfterDays   int     `json:"end_after_days"`
+	SpendUSDPerDay float64 `json:"spend_usd_per_day"`
+	ReviewsPerDay  int     `json:"reviews_per_day"`
+	FollowUps      int     `json:"follow_ups"`
+	CatchUp        bool    `json:"catch_up"`
+}
+
+// TalkootRoutine is one routine. ID is also the id of the proposal that
+// asked for it, and the Ref of the room's routine lines.
+type TalkootRoutine struct {
+	ID string `json:"id"`
+	// Member owns the routine, and a run reports to it.
+	Member string `json:"member"`
+	// Kind is watcher, brief, or task.
+	Kind     string `json:"kind"`
+	Schedule string `json:"schedule"`
+	// Prompt is what a brief or a task reads, and Command is what a watcher
+	// runs. A routine has one of the two.
+	Prompt  string `json:"prompt,omitempty"`
+	Command string `json:"command,omitempty"`
+	// Fields holds every limit as the approval froze it.
+	Fields TalkootRoutineFields `json:"fields"`
+	EndsAt time.Time            `json:"ends_at,omitzero"`
+	// Status is active, paused, or ended. An ended routine reached the end
+	// that its approval gave it, and it does not resume.
+	Status     string    `json:"status"`
+	ApprovedBy string    `json:"approved_by,omitempty"`
+	ApprovedAt time.Time `json:"approved_at,omitzero"`
+	// ChangedBy and Reason describe the last pause, resume or end. ChangedBy
+	// is empty when terva made the change: a failed run pauses its routine.
+	ChangedBy string `json:"changed_by,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	// Runs counts the runs that the routine started.
+	Runs int `json:"runs,omitempty"`
+	// SpentTodayUSD is what the routine's runs spent today. Fields holds the
+	// daily limit that it counts against.
+	SpentTodayUSD float64 `json:"spent_today_usd,omitempty"`
+	// RunSession is the session of the run that is at work now, or empty.
+	RunSession string `json:"run_session,omitempty"`
+	// Next is the routine's next time, and it is unset for a paused routine.
+	Next time.Time `json:"next,omitzero"`
+	// Problem says why the routine does not run at its time: its timer is
+	// missing or cannot fire, or its record does not read.
+	Problem string `json:"problem,omitempty"`
+}
+
+// TalkootRoutineAsk is the routine that a proposal asks for, as its card
+// shows it.
+type TalkootRoutineAsk struct {
+	Kind     string `json:"kind"`
+	Schedule string `json:"schedule"`
+	Prompt   string `json:"prompt,omitempty"`
+	Command  string `json:"command,omitempty"`
+	// Differs lists each limit that the ask sets to another value than the
+	// default of its kind. The card shows these and hides the rest (decision
+	// 0029 rule 5). The room records every limit at the approval.
+	Differs []TalkootRoutineDiff `json:"differs,omitempty"`
+	// Fields holds every limit as an approval would store it now. It is
+	// absent while DefaultsUnknown is set.
+	Fields *TalkootRoutineFields `json:"fields,omitempty"`
+	// DefaultsUnknown is set while routines are off, so the daemon has no
+	// defaults to compare against. Differs then lists each limit that the
+	// member set, with no default, and an approval is refused.
+	DefaultsUnknown bool `json:"defaults_unknown,omitempty"`
+	// Digest names what this card shows. An approval sends it back, and the
+	// daemon refuses one whose card changed after it was read. It is absent
+	// while DefaultsUnknown is set.
+	Digest string `json:"digest,omitempty"`
+}
+
+// TalkootRoutineDiff is one limit of an ask, beside the default of its kind.
+// Default is empty when the default is not known.
+type TalkootRoutineDiff struct {
+	Field   string `json:"field"`
+	Value   string `json:"value"`
+	Default string `json:"default,omitempty"`
+}
+
 // TalkootEnvelope is one message in a talkoot. The daemon builds From and
 // Chain. A sender names neither.
 type TalkootEnvelope struct {
@@ -593,6 +761,14 @@ type TalkootLine struct {
 	Attempt int    `json:"attempt,omitempty"`
 	Card    string `json:"card,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
+	// Due is set on a wake line: the time the wake fires. The line's Action
+	// is set, cancelled, or dropped, its Ref is the wake's id, and its Text is
+	// the reason the member gave.
+	Due time.Time `json:"due,omitzero"`
+	// Routine is set on an approved routine line: the routine with every
+	// limit's value at the approval. A routine line's Action is approved,
+	// paused, resumed, or deleted, and its Ref is the routine's id.
+	Routine *TalkootRoutine `json:"routine,omitempty"`
 }
 
 // TalkootNotesResult is the talkoot.notes reply, newest note first.
@@ -804,6 +980,9 @@ type TalkootProposal struct {
 	// the card. An approval writes it to the persona library before the
 	// roster changes, when the operations that apply still name it.
 	Persona *TalkootPersonaDraft `json:"persona,omitempty"`
+	// Routine is set on a proposal that asks for a routine and changes no
+	// roster. An approval stores the routine and sets its timer.
+	Routine *TalkootRoutineAsk `json:"routine,omitempty"`
 }
 
 // TalkootPersonaDraft is a persona file that a proposal carries: the name the
@@ -849,14 +1028,18 @@ type TalkootDecideParams struct {
 	Decision string      `json:"decision"`
 	Ops      []TalkootOp `json:"ops,omitempty"`
 	Reason   string      `json:"reason,omitempty"`
+	// Digest is the digest of a routine's card, as the proposal's routine
+	// gave it. An approval of a routine needs it. A roster proposal and a
+	// decline take none.
+	Digest string `json:"digest,omitempty"`
 }
 
 // TalkootEvent is the body of the talkoot_* events on a [TalkootAddr]
 // address.
 type TalkootEvent struct {
 	ID string `json:"id"`
-	// Line is set on [EventTalkootEnvelope], [EventTalkootAnswer], and
-	// [EventTalkootRoster].
+	// Line is set on [EventTalkootEnvelope], [EventTalkootIntro],
+	// [EventTalkootAnswer], [EventTalkootWake], and [EventTalkootRoster].
 	Line *TalkootLine `json:"line,omitempty"`
 	// Members is set on [EventTalkootStatus]: every member's status, in
 	// roster order. State is the team's combined state from them.
@@ -876,6 +1059,16 @@ func TalkootEnvelopeEvent(id string, l TalkootLine) Event {
 // TalkootIntroEvent builds an [EventTalkootIntro] event.
 func TalkootIntroEvent(id string, l TalkootLine) Event {
 	return Event{WireEvent: core.WireEvent{Type: EventTalkootIntro}, Talkoot: &TalkootEvent{ID: id, Line: &l}}
+}
+
+// TalkootRoutineEvent builds an [EventTalkootRoutine] event.
+func TalkootRoutineEvent(id string, l TalkootLine) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventTalkootRoutine}, Talkoot: &TalkootEvent{ID: id, Line: &l}}
+}
+
+// TalkootWakeEvent builds an [EventTalkootWake] event.
+func TalkootWakeEvent(id string, l TalkootLine) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventTalkootWake}, Talkoot: &TalkootEvent{ID: id, Line: &l}}
 }
 
 // TalkootAnswerEvent builds an [EventTalkootAnswer] event.

@@ -34,6 +34,10 @@ type talkootReads struct {
 	watch   sync.Once
 	// taken counts the deliveries any turn of this session has read.
 	taken atomic.Uint64
+	// turnTaken and turnUsers hold taken and users as they were when the
+	// turn at work began. They tell a turn that deliveries alone fed from
+	// one that a person typed into (deliveredOnly).
+	turnTaken, turnUsers atomic.Uint64
 	// fresh is set when a turn starts and cleared by its first user message.
 	// opened counts the turns whose first user message was a person's
 	// delivery. A turn that leaves opened unchanged was started by a person

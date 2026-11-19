@@ -247,7 +247,6 @@ ChatView
 	services	[]ChatServiceInfo	omitempty
 	bridge	ChatBridgeState
 	daemon_pid	int	omitempty
-	problem	string	omitempty
 CommandEntry
 	ext	string
 	name	string
@@ -765,10 +764,6 @@ ProvidersView
 QueueParams
 	text	string
 	source	string	omitempty
-QueueSendParams
-	index	int
-	text	string	omitempty
-	all	bool	omitempty
 QueueSetParams
 	texts	[]string
 	sources	[]string	omitempty
@@ -1322,7 +1317,6 @@ TalkootLine
 	outcome	string	omitempty
 	due	time.Time	omitzero
 	routine	*TalkootRoutine	omitempty
-	count	int	omitempty
 TalkootListResult
 	talkoots	[]TalkootSummary
 TalkootMark
@@ -1529,7 +1523,6 @@ TalkootRoutine
 	reason	string	omitempty
 	runs	int	omitempty
 	spent_today_usd	float64	omitempty
-	reviews_today	int	omitempty
 	run_session	string	omitempty
 	next	time.Time	omitzero
 	problem	string	omitempty
@@ -1542,7 +1535,6 @@ TalkootRoutineAsk
 	fields	*TalkootRoutineFields	omitempty
 	defaults_unknown	bool	omitempty
 	digest	string	omitempty
-	reviews_counted	bool	omitempty
 TalkootRoutineDiff
 	field	string
 	value	string
@@ -1564,7 +1556,6 @@ TalkootRoutines
 	on	bool
 	max	int	omitempty
 	problem	string	omitempty
-	reviews_counted	bool	omitempty
 	routines	[]TalkootRoutine	omitempty
 TalkootSaveTemplateParams
 	id	string

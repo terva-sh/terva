@@ -1,11 +1,12 @@
 import { t, tn } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import { useContext } from 'preact/hooks'
-import type { Decision, TalkootCard, TalkootKickoff, TalkootMemberChange, TalkootMemberEntry, TalkootProposal, TalkootTeamChange } from '../../platform/ctrlproto/types'
+import type { Decision, TalkootCard, TalkootKickoff, TalkootMemberChange, TalkootMemberEntry, TalkootProposal, TalkootRoutineAsk, TalkootTeamChange } from '../../platform/ctrlproto/types'
 import { AskRequest } from '../interactions/AskRequest'
 import { PermissionRequest } from '../interactions/PermissionRequest'
 import { who } from './RoomLine'
 import { MarkOf, MarksContext, MemberMark } from './MemberMark'
+import { kindName, limitLabel, limitValue, routineText } from './routines'
 
 // TalkootInbox shows every card that waits for a person: a member's question
 // or approval, a roster proposal, and a new team's kickoff.
@@ -91,9 +92,13 @@ export function InboxCard({
       ) : c.kind === 'proposal' && c.proposal ? (
         <ProposalCard
           proposal={c.proposal}
-          onDecide={(decision) =>
-            void act(client.send('talkoot.decide', { id, by: person, proposal: c.proposal!.id, decision }))
-          }
+          onDecide={(decision) => {
+            // 🔑 An approval of a routine is for the card on the screen. The
+            // card's digest goes back with it, and the daemon refuses an
+            // approval whose card changed after this one was drawn.
+            const digest = decision === 'approve' ? c.proposal!.routine?.digest : undefined
+            void act(client.send('talkoot.decide', { id, by: person, proposal: c.proposal!.id, decision, ...(digest ? { digest } : {}) }))
+          }}
         />
       ) : c.kind === 'kickoff' && c.kickoff ? (
         <KickoffCard
@@ -114,7 +119,7 @@ function cardSummary(c: TalkootCard): string {
     case 'ask':
       return t('%s has a question', who(c.member))
     case 'proposal':
-      return t('A roster proposal: %s', c.proposal?.title ?? '')
+      return c.proposal?.routine ? t('A routine: %s', c.proposal.title) : t('A roster proposal: %s', c.proposal?.title ?? '')
     case 'kickoff':
       return t('The team waits for its kickoff')
   }
@@ -125,6 +130,7 @@ function cardSummary(c: TalkootCard): string {
 // that grants more flagged. A look batch, such as a theme, shows the marks
 // before and after side by side. A new persona shows in full.
 function ProposalCard({ proposal, onDecide }: { proposal: TalkootProposal; onDecide: (d: 'approve' | 'decline') => void }) {
+  if (proposal.routine) return <RoutineCard proposal={proposal} routine={proposal.routine} onDecide={onDecide} />
   const looks = proposal.changes.filter(
     (ch) => ch.before && ch.after && (markOf(ch.before) !== markOf(ch.after) || fieldText(ch.mark_before) !== fieldText(ch.mark_after)),
   )
@@ -154,6 +160,81 @@ function ProposalCard({ proposal, onDecide }: { proposal: TalkootProposal; onDec
           <summary>{t('New persona: %s', proposal.persona.name)}</summary>
           <pre class="preview">{proposal.persona.text}</pre>
         </details>
+      )}
+      {proposal.problem && <div class="talkoot-error">{proposal.problem}</div>}
+      <div class="card-actions">
+        <button class="btn primary" onClick={() => onDecide('approve')}>
+          {t('Approve')}
+        </button>
+        <button class="btn" onClick={() => onDecide('decline')}>
+          {t('Decline')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// RoutineCard is the inbox form of a member's ask for a routine: the kind,
+// the schedule, and the prompt or the command as written. It lists only the
+// limits that differ from the defaults of the kind, each beside its default.
+// The room records every limit when a person approves.
+function RoutineCard({
+  proposal,
+  routine,
+  onDecide,
+}: {
+  proposal: TalkootProposal
+  routine: TalkootRoutineAsk
+  onDecide: (d: 'approve' | 'decline') => void
+}) {
+  const differs = routine.differs ?? []
+  return (
+    <div class={`card talkoot-proposal talkoot-routine-card class-${proposal.class}`}>
+      <div class="card-head">
+        {proposal.title} <span class="talkoot-kind">{kindName(routine.kind)}</span>
+      </div>
+      <p>
+        {t('Schedule')}: <code>{routine.schedule}</code>
+      </p>
+      <div class="talkoot-note">{routine.kind === 'watcher' ? t('It runs this command, with no model:') : t('Each run reads this prompt:')}</div>
+      <pre class="preview">{routineText(routine)}</pre>
+      {proposal.why && <p class="talkoot-note">{proposal.why}</p>}
+      {differs.length > 0 ? (
+        <table class="talkoot-fields">
+          <tbody>
+            {differs.map((d) => (
+              <tr key={d.field} class="authority">
+                <th>{limitLabel(d.field)}</th>
+                <td>{limitValue(d.field, d.value)}</td>
+                <td>{d.default !== undefined && d.default !== '' ? t('default: %s', limitValue(d.field, d.default)) : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        !routine.defaults_unknown && <div class="talkoot-note">{t('Every limit has the default of its kind.')}</div>
+      )}
+      {routine.defaults_unknown && (
+        <div class="talkoot-error">{t('Routines are off, so the defaults are not known and an approval is refused. The card lists only the limits that the member set.')}</div>
+      )}
+      {/* What an approval gives, and what this version does not do yet. A
+          person who reads the limits on the card must know which of them
+          the daemon keeps. */}
+      <div class="talkoot-note">
+        {routine.kind === 'watcher'
+          ? t('This version keeps the schedule of a watcher and does not run its command yet.')
+          : t('Each run works with no person present, in a session of its own, and ends in a report to its member. A routine that passes its daily spend limit pauses, and a run is stopped when its cost passes that limit. This version does not enforce the review limit yet.')}
+      </div>
+      {/* 🚨 A follow-up is one more run with nobody present. The short list
+          above hides a limit that has its default, and a task's default
+          allows follow-ups. So the card says the number each time. */}
+      {routine.kind !== 'watcher' && (routine.fields?.follow_ups ?? 0) > 0 && (
+        <div class="talkoot-note authority">
+          {t(
+            'A run may set a follow-up, which is one more run with no person present. This routine allows %d after each run at its time, while wakes are on.',
+            routine.fields?.follow_ups ?? 0,
+          )}
+        </div>
       )}
       {proposal.problem && <div class="talkoot-error">{proposal.problem}</div>}
       <div class="card-actions">

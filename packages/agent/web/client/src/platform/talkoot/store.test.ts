@@ -254,3 +254,90 @@ describe('the talkoot hub', () => {
     expect(fn).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the wakes in the talkoot store', () => {
+  const wakeLine = (action: string, ref: string, member: string, due: string, at: string): TalkootLine => ({
+    type: 'wake',
+    at,
+    action,
+    ref,
+    member,
+    chain: 'c1',
+    text: `Check ${ref}.`,
+    due,
+  })
+  const fired = (id: string, member: string, at: string): TalkootLine => {
+    const e: TalkootEnvelope = { id, talkoot: 'crew', from: member, to: [member], kind: 'wake', body: `Check ${id}.`, chain: { root: 'c1', hops: 1 }, at }
+    return { type: 'envelope', at, envelope: e }
+  }
+  const on = (): TalkootView => ({ ...view(), wakes: { on: true, per_member: 2, max_delay: '2h' } })
+
+  it('keeps the open wakes of the view current from the room, the soonest first', () => {
+    let s = setView(emptyTalkoot('crew'), on(), 0)
+    s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: wakeLine('set', 'w2', 'jev', '2026-11-17T12:00:00Z', '2026-11-17T10:00:00Z') }))
+    s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: wakeLine('set', 'w1', 'helm', '2026-11-17T11:00:00Z', '2026-11-17T10:00:01Z') }))
+    expect(s.view!.wakes!.open!.map((w) => w.id)).toEqual(['w1', 'w2'])
+    expect(s.view!.wakes!.open![0]).toMatchObject({ member: 'helm', reason: 'Check w1.', due: '2026-11-17T11:00:00Z', chain: 'c1' })
+    // The caps stay as the view read them.
+    expect(s.view!.wakes).toMatchObject({ on: true, per_member: 2, max_delay: '2h' })
+    // The same line twice, as a page and an event deliver it, is one wake.
+    s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: wakeLine('set', 'w1', 'helm', '2026-11-17T11:00:00Z', '2026-11-17T10:00:01Z') }))
+    expect(s.view!.wakes!.open).toHaveLength(2)
+    expect(s.lines.filter((l) => l.type === 'wake')).toHaveLength(2)
+  })
+
+  it('closes a wake that a person cancelled, that was dropped, or that fired', () => {
+    let s = setView(emptyTalkoot('crew'), on(), 0)
+    for (const id of ['w1', 'w2', 'w3', 'w4']) {
+      s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: wakeLine('set', id, 'helm', '2026-11-17T11:00:00Z', `2026-11-17T10:00:0${id[1]}Z`) }))
+    }
+    s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: { ...wakeLine('cancelled', 'w1', 'helm', '2026-11-17T11:00:00Z', '2026-11-17T10:30:00Z'), by: 'human:sothr' } }))
+    s = applyTalkootEvent(s, ev('talkoot_wake', { id: 'crew', line: { ...wakeLine('dropped', 'w2', 'helm', '2026-11-17T11:00:00Z', '2026-11-17T11:00:00Z'), reason: 'wakes are off' } }))
+    s = applyTalkootEvent(s, ev('talkoot_envelope', { id: 'crew', line: fired('w3', 'helm', '2026-11-17T11:00:01Z') }))
+    expect(s.view!.wakes!.open!.map((w) => w.id)).toEqual(['w4'])
+    // An ordinary envelope closes no wake.
+    s = applyTalkootEvent(s, ev('talkoot_envelope', { id: 'crew', line: env('helm', ['jev'], '2026-11-17T11:00:02Z') }))
+    expect(s.view!.wakes!.open!.map((w) => w.id)).toEqual(['w4'])
+  })
+
+  it('reads the view again after a routine line, which carries no next time', () => {
+    let s = setView(emptyTalkoot('crew'), on(), 0)
+    expect(rosterStale(s)).toBe(false)
+    const line: TalkootLine = { type: 'routine', at: '2026-11-18T10:00:00Z', action: 'paused', member: 'helm', ref: '01R', by: 'human:sothr' }
+    s = applyTalkootEvent(s, ev('talkoot_routine', { id: 'crew', line }))
+    expect(rosterStale(s)).toBe(true)
+    expect(s.lines.filter((l) => l.type === 'routine')).toHaveLength(1)
+    // A line for another team changes nothing.
+    const other = applyTalkootEvent(setView(emptyTalkoot('crew'), on(), 0), ev('talkoot_routine', { id: 'lake', line }))
+    expect(rosterStale(other)).toBe(false)
+  })
+
+  it('reads the view again after a run or its report, and shows each as a line of its own', () => {
+    const at = '2026-11-18T10:00:00Z'
+    const of = (id: string, to: string[], kind: string): TalkootLine => ({
+      type: 'envelope',
+      at,
+      envelope: { id, talkoot: 'crew', from: 'routine:01R', to, kind, body: 'x', chain: { root: 'r1', hops: to.length }, at },
+    })
+    let s = setView(emptyTalkoot('crew'), on(), 0)
+    // An envelope between members changes no routine.
+    s = applyTalkootEvent(s, ev('talkoot_envelope', { id: 'crew', line: env('helm', ['jev'], at) }))
+    expect(rosterStale(s)).toBe(false)
+    // A run changes its routine's count, and the run that is at work.
+    s = applyTalkootEvent(s, ev('talkoot_envelope', { id: 'crew', line: of('r1', [], 'run') }))
+    expect(rosterStale(s)).toBe(true)
+    // 🚨 Two reports to one member are not an exchange between teammates.
+    const items = roomItems([of('r2', ['helm'], 'report'), of('r3', ['helm'], 'report')])
+    expect(items.map((it) => it.kind)).toEqual(['line', 'line'])
+  })
+
+  it('shows a wake that fired as a line of its own, and never inside an exchange', () => {
+    const lines = [
+      env('helm', ['helm'], '2026-11-17T10:00:00Z'),
+      fired('w1', 'helm', '2026-11-17T10:00:01Z'),
+      fired('w2', 'helm', '2026-11-17T10:00:02Z'),
+    ]
+    const items = roomItems(lines)
+    expect(items.map((it) => it.kind)).toEqual(['line', 'line', 'line'])
+  })
+})

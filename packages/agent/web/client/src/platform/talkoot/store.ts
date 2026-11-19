@@ -62,6 +62,16 @@ export function isPerson(addr: string): boolean {
   return addr.startsWith(HUMAN_PREFIX)
 }
 
+// ROUTINE_PREFIX marks a routine as the sender of a run and of its report
+// (talkoot.RoutinePrefix). The id after it is the routine's.
+const ROUTINE_PREFIX = 'routine:'
+
+// isRoutine reports whether addr names a routine, and not a member or a
+// person.
+export function isRoutine(addr: string): boolean {
+  return addr.startsWith(ROUTINE_PREFIX)
+}
+
 // lineKey identifies a room line, so a line that a page and an event both
 // delivered is kept once. An envelope has its own id; any other line is its
 // type, time, member, and ref.
@@ -171,6 +181,24 @@ export function cardKey(c: TalkootCard): string {
   return `${c.kind}:${c.session}:${c.id}`
 }
 
+// openWake adds the wake of a set line to the view's open wakes, the soonest
+// first. The view is read once, and the room's events keep its list current.
+function openWake(view: TalkootView | null, l: TalkootLine): TalkootView | null {
+  if (!view || !l.ref || !l.member || !l.due) return view
+  const open = (view.wakes?.open ?? []).filter((w) => w.id !== l.ref)
+  open.push({ id: l.ref, member: l.member, chain: l.chain, reason: l.text ?? '', set: l.at, due: l.due })
+  open.sort((a, b) => a.due.localeCompare(b.due))
+  // Only a daemon with wakes on writes a set line.
+  return { ...view, wakes: { ...(view.wakes ?? { on: true }), open } }
+}
+
+// closeWake removes a wake that fired, was cancelled, or was dropped.
+function closeWake(view: TalkootView | null, id: string): TalkootView | null {
+  const open = view?.wakes?.open
+  if (!view || !view.wakes || !open || !open.some((w) => w.id === id)) return view
+  return { ...view, wakes: { ...view.wakes, open: open.filter((w) => w.id !== id) } }
+}
+
 function withStatus(members: TalkootMember[], statuses: TalkootMemberStatus[]): TalkootMember[] {
   const by = new Map(statuses.map((st) => [st.member, st]))
   return members.map((m) => {
@@ -186,10 +214,31 @@ export function applyTalkootEvent(s: TalkootState, ev: WireEvent): TalkootState 
   if (!t || t.id !== s.id) return s
   switch (ev.type) {
     case 'talkoot_envelope':
+      if (!t.line) return s
+      // A wake that fires is an envelope with the wake's id, so it is open no
+      // longer.
+      return {
+        ...s,
+        lines: appendLines(s.lines, [t.line]),
+        view: t.line.envelope?.kind === 'wake' ? closeWake(s.view, t.line.envelope.id) : s.view,
+        // A run that starts or ends changes its routine's count of runs and
+        // the run at work, so the view is read again.
+        rosterGen: t.line.envelope && isRoutine(t.line.envelope.from) ? s.rosterGen + 1 : s.rosterGen,
+      }
     case 'talkoot_intro':
     case 'talkoot_answer':
       return t.line ? { ...s, lines: appendLines(s.lines, [t.line]) } : s
+    case 'talkoot_wake': {
+      const l = t.line
+      if (!l) return s
+      const lines = appendLines(s.lines, [l])
+      if (l.action !== 'set') return { ...s, lines, view: closeWake(s.view, l.ref ?? '') }
+      return { ...s, lines, view: openWake(s.view, l) }
+    }
     case 'talkoot_roster':
+    // A routine line carries no next time and no timer problem, so the view
+    // is read again, as for a roster line.
+    case 'talkoot_routine':
       return { ...s, lines: t.line ? appendLines(s.lines, [t.line]) : s.lines, rosterGen: s.rosterGen + 1 }
     case 'talkoot_status':
       if (!t.members || !s.view) return s
@@ -267,7 +316,10 @@ export type RoomItem =
 
 function teammatePair(l: TalkootLine): [string, string] | null {
   const e = l.envelope
-  if (!e || isPerson(e.from) || e.to.length !== 1 || isPerson(e.to[0])) return null
+  // A wake goes from a member to itself, and no teammate sent it. It stands
+  // alone, so a person sees each turn that started with nobody asking. A
+  // routine's run and its report stand alone for the same reason.
+  if (!e || e.kind === 'wake' || isPerson(e.from) || isRoutine(e.from) || e.to.length !== 1 || isPerson(e.to[0])) return null
   const pair = [e.from, e.to[0]].sort() as [string, string]
   return pair
 }

@@ -193,6 +193,7 @@ func TestValidateRefusals(t *testing.T) {
 		{"no coordinator", func(r *Roster) { r.Members[0].Role = RoleSpecialist }, "exactly one coordinator, and this one has 0"},
 		{"bad role", func(r *Roster) { r.Members[4].Role = "boss" }, `gage: role "boss"`},
 		{"duplicate id", func(r *Roster) { r.Members[1].ID = "helm" }, `"helm" appears twice`},
+		{"the word for the person as an id", func(r *Roster) { r.Members[1].ID = PersonWord }, `member id "human" is the word for the person`},
 		{"bad id", func(r *Roster) { r.Members[1].ID = "At/las" }, `"At/las"`},
 		{"two shared writers", func(r *Roster) {
 			r.Members[1].Posture = "ask"

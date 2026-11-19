@@ -181,7 +181,7 @@ func TestARecruiterProposesAMemberWithANewPersona(t *testing.T) {
 		!strings.Contains(cards[0].Proposal.Title, "with the new persona Rook") {
 		t.Fatalf("cards: %+v", cards)
 	}
-	if _, err := w.talkootDecide(t.Context(), "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, ""); err != nil {
+	if _, err := w.talkootDecide(t.Context(), "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(persona.Dir(), "rook.md")); err != nil || string(got) != rookDraft {
@@ -255,7 +255,7 @@ func TestAnApprovalWritesThePersonaOnlyWhenItStillApplies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, ""); err == nil || !strings.Contains(err.Error(), "trusted workspace") {
+	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, "", ""); err == nil || !strings.Contains(err.Error(), "trusted workspace") {
 		t.Fatalf("untrusted approval: err = %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -274,7 +274,7 @@ func TestAnApprovalWritesThePersonaOnlyWhenItStillApplies(t *testing.T) {
 	if err := os.WriteFile(path, []byte(mine), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, ""); err == nil || !strings.Contains(err.Error(), "now taken") {
+	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, "", ""); err == nil || !strings.Contains(err.Error(), "now taken") {
 		t.Fatalf("approval over a taken name: err = %v", err)
 	}
 	if got, _ := os.ReadFile(path); string(got) != mine {
@@ -290,7 +290,7 @@ func TestAnApprovalWritesThePersonaOnlyWhenItStillApplies(t *testing.T) {
 	if _, ok := persona.Lookup("rook"); ok {
 		t.Fatal("the probe is void: Lookup sees the unparseable file")
 	}
-	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, ""); err == nil || !strings.Contains(err.Error(), "write the persona") {
+	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, "", ""); err == nil || !strings.Contains(err.Error(), "write the persona") {
 		t.Fatalf("approval over an unreadable file: err = %v", err)
 	}
 	if got := inbox(t, w); len(got) != 1 || got[0].Proposal == nil || !strings.Contains(got[0].Proposal.Problem, "write the persona") {
@@ -308,7 +308,7 @@ func TestAnApprovalWritesThePersonaOnlyWhenItStillApplies(t *testing.T) {
 
 	// A person's edit that no longer names the draft writes no persona.
 	edited := []talkoot.Op{{Op: talkoot.OpAdd, Member: "rook", Set: map[string]any{"role": "specialist", "persona": "kirjuri", "posture": "plan"}}}
-	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, edited, ""); err != nil {
+	if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, edited, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -376,7 +376,7 @@ func TestAnApprovalChecksTheStoredDraftAgain(t *testing.T) {
 		if err := talkoot.SaveProposal(dir, stored); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, ""); err == nil {
+		if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionApprove, nil, "", ""); err == nil {
 			t.Fatalf("%s: the approval went through", name)
 		}
 		after, err := talkoot.LoadProposal(dir, p.ID)
@@ -392,7 +392,7 @@ func TestAnApprovalChecksTheStoredDraftAgain(t *testing.T) {
 		if _, ok := memberOf(*w.talkoot.runs["crew"].roster.Load(), "rook"); ok {
 			t.Fatalf("%s: the roster changed", name)
 		}
-		if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionDecline, nil, ""); err != nil {
+		if _, err := w.talkootDecide(ctx, "crew", "sothr", p.ID, ctrlproto.TalkootDecisionDecline, nil, "", ""); err != nil {
 			t.Fatalf("%s: decline: %v", name, err)
 		}
 	}
