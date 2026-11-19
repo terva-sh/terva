@@ -87,6 +87,7 @@
   "/jail: %s": "/jail: %s",
   "/migrate is a command-line step: run `terva migrate` from a shell": "/migrate is a command-line step: run `terva migrate` from a shell",
   "/reveal to show what came before": "/reveal to show what came before",
+  "/shared lists this file, and s saves a copy here": "/shared lists this file, and s saves a copy here",
   "/swarm archive <id>: missing id": "/swarm archive <id>: missing id",
   "/swarm attach: not implemented yet (needs PTY reparenting). Use /swarm logs %s to watch its transcript.": "/swarm attach: not implemented yet (needs PTY reparenting). Use /swarm logs %s to watch its transcript.",
   "/swarm kill <id>: missing id": "/swarm kill <id>: missing id",

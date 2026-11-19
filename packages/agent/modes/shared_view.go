@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
@@ -37,9 +38,13 @@ var (
 	openSystemViewer = openInSystemViewer
 )
 
+// underWSL is tui.IsWSL behind a var, so a test on plain Linux can take the
+// WSL branch of openInSystemViewer and one under WSL can take the other.
+var underWSL = tui.IsWSL
+
 // openInSystemViewer hands a path to the platform's "open this with whatever
 // handles it" command — the same three-way switch the OAuth browser launch
-// uses (packages/auth/manager.go).
+// uses (packages/auth/manager.go), plus WSL.
 //
 // Start rather than Run: the viewer is a separate application and may well
 // outlive terva, so waiting on it would hang the TUI for as long as the user
@@ -52,9 +57,57 @@ func openInSystemViewer(path string) error {
 	case "windows":
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
 	default:
+		// ⚠️ The Windows route is tried, not chosen. With interop switched off,
+		// explorer.exe is still on PATH and wslpath still converts, so
+		// everything short of the exec looks ready. The exec is what fails, as
+		// an exec format error, and only then is it known that this host
+		// cannot run a Windows program.
+		if underWSL() {
+			if wsl, ok := wslViewerCommand(path); ok && wsl.Start() == nil {
+				return nil
+			}
+		}
 		cmd = exec.Command("xdg-open", path)
 	}
 	return cmd.Start()
+}
+
+// wslViewerCommand builds the command that opens path with the Windows default
+// application, or reports that this WSL host cannot run one.
+//
+// A WSL distribution usually has no xdg-open, and one that does rarely has a
+// handler behind it: the desktop is Windows. So the file goes to Windows.
+// wslpath turns the Linux path into the \\wsl.localhost form Windows can read,
+// and explorer.exe opens a file path with whatever is registered for its type.
+//
+// ⚠️ Both tools are looked up rather than assumed: `appendWindowsPath = false`
+// in wsl.conf leaves explorer.exe off PATH. Finding them proves only that they
+// exist. Whether explorer.exe can RUN is the caller's question, answered by
+// starting it. On any failure the caller falls back to xdg-open, which is the
+// right answer for a user who gave their distribution a Linux desktop of its
+// own.
+func wslViewerCommand(path string) (*exec.Cmd, bool) {
+	wslpath, err := exec.LookPath("wslpath")
+	if err != nil {
+		return nil, false
+	}
+	explorer, err := exec.LookPath("explorer.exe")
+	if err != nil {
+		return nil, false
+	}
+	// Bounded, because this runs on a keypress. wslpath is a local translation
+	// and answers at once; a hung interop layer is the case the bound is for.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, wslpath, "-w", path).Output()
+	if err != nil {
+		return nil, false
+	}
+	windowsPath := strings.TrimSpace(string(out))
+	if windowsPath == "" {
+		return nil, false
+	}
+	return exec.Command(explorer, windowsPath), true
 }
 
 // Shared-file previews for the transcript cards.
@@ -66,10 +119,10 @@ func openInSystemViewer(path string) error {
 // to the renderer, which draws them with the same inline-image path a tool
 // result's images use.
 //
-// Only images are fetched. Everything else is a card and a path — there is
-// nothing a terminal can do with a PDF's bytes that the path does not do
-// better, and pulling a 200 MB video through the control plane to render
-// nothing would be a cost with no product.
+// Only images are fetched. Everything else is a card and a path (see the path
+// row below) — there is nothing a terminal can do with a PDF's bytes that the
+// path does not do better, and pulling a 200 MB video through the control
+// plane to render nothing would be a cost with no product.
 
 // sharedCarrier is the optional slice of the carrier this surface needs.
 //
@@ -181,6 +234,7 @@ func (i *Interactive) fetchSharedPreviewsFor(sess string, files []core.SharedFil
 					i.sharedPreviews = map[string][]byte{}
 				}
 				i.sharedPreviews[id] = content.Data
+				i.sharedCardRev++
 			}
 			i.mu.Unlock()
 			i.invalidate()
@@ -208,6 +262,154 @@ func transcriptShares(msgs []provider.Message) []core.SharedFile {
 			continue
 		}
 		out = append(out, files...)
+	}
+	return out
+}
+
+// --- the path row on a card ---
+//
+// A card whose terminal draws no picture is a name and a size, which is
+// nothing to act on. The path is what makes it usable there: the user copies
+// it into whatever does show an image. The transcript record cannot carry it,
+// because the record is a handle that every client reads and the path is true
+// on one host only. So the TUI asks the store, and only when it is on that
+// host.
+
+// sharedStoreIsRemote reports a share store this client can reach and cannot
+// read from its own disk: `terva attach`, with a carrier that serves the verbs.
+//
+// The card says "save a copy" in that case and nothing in the other two. A
+// local carrier shows the path itself, and a carrier with no verbs has no
+// /shared panel to send the user to.
+func (i *Interactive) sharedStoreIsRemote() bool {
+	if i.cfg.CarrierLocal {
+		return false
+	}
+	_, ok := i.sharedCarrier()
+	return ok
+}
+
+// fetchSharedPaths asks the store where the shares on screen live, for any the
+// client has not asked about yet.
+//
+// Called from the render path, on fetchSharedPreviews' terms: the claim is
+// taken under the lock before the request goes out, and the request runs on its
+// own goroutine. One listing answers for every share in the session, so a
+// transcript with ten cards costs one call and not ten.
+func (i *Interactive) fetchSharedPaths(files []core.SharedFile) {
+	i.fetchSharedPathsFor(i.carrierSession(), files)
+}
+
+// fetchSharedPathsFor is fetchSharedPaths for a session id the caller already
+// holds, split out for the reason fetchSharedPreviewsFor is.
+func (i *Interactive) fetchSharedPathsFor(sess string, files []core.SharedFile) {
+	// 🔑 Local carriers only. The listing's path names the daemon's disk, and
+	// a card that printed it on another machine would send the user to a file
+	// that is not there, or to a different one of the same name.
+	if !i.cfg.CarrierLocal || len(files) == 0 {
+		return
+	}
+	sc, ok := i.sharedCarrier()
+	if !ok {
+		return
+	}
+
+	i.mu.Lock()
+	if sess != i.cfg.CarrierSession {
+		i.mu.Unlock()
+		return
+	}
+	if i.sharedPathsSession != sess {
+		// Adopt the binding on first use, as the preview cache does: the
+		// construction paths build an Interactive that is already bound and
+		// never switch.
+		i.sharedPaths = nil
+		i.sharedPathsAsked = nil
+		i.sharedPathsSession = sess
+	}
+	if i.sharedPathsAsked == nil {
+		i.sharedPathsAsked = map[string]bool{}
+	}
+	ask := false
+	for _, f := range files {
+		if f.ID == "" || i.sharedPathsAsked[f.ID] {
+			continue
+		}
+		// Claimed whether or not the listing turns out to hold it. A swept
+		// file is absent from the store for good, so asking again on the next
+		// frame would list the directory forever to learn the same thing.
+		i.sharedPathsAsked[f.ID] = true
+		ask = true
+	}
+	i.mu.Unlock()
+
+	if !ask {
+		return
+	}
+	go func() {
+		entries, err := sc.SharedFiles(context.Background(), sess)
+		if err != nil {
+			// The card is complete without a path row, and /shared reports
+			// the failure in words when the user goes looking.
+			return
+		}
+		i.mu.Lock()
+		i.recordSharedPathsLocked(sess, entries)
+		i.mu.Unlock()
+		i.invalidate()
+	}()
+}
+
+// recordSharedPathsLocked folds a listing into the path cache. Caller holds
+// i.mu.
+//
+// Both readers of the listing land here, the card's own fetch and the /shared
+// panel's refresh, so a path the card failed to get arrives the moment the
+// user opens the panel instead of never.
+func (i *Interactive) recordSharedPathsLocked(sess string, entries []ctrlproto.SharedFileEntry) {
+	if !i.cfg.CarrierLocal || sess != i.cfg.CarrierSession {
+		return
+	}
+	if i.sharedPathsSession != sess {
+		i.sharedPaths = nil
+		i.sharedPathsAsked = nil
+		i.sharedPathsSession = sess
+	}
+	for _, e := range entries {
+		if e.ID == "" || e.Path == "" {
+			continue
+		}
+		if i.sharedPaths[e.ID] == e.Path {
+			continue
+		}
+		if i.sharedPaths == nil {
+			i.sharedPaths = map[string]string{}
+		}
+		i.sharedPaths[e.ID] = e.Path
+		i.sharedCardRev++
+	}
+}
+
+// sharedCardRevision is the count of changes to what the cards draw, for the
+// idle chat cache's key. It takes its own lock, as carrierTranscriptRev does.
+func (i *Interactive) sharedCardRevision() uint64 {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.sharedCardRev
+}
+
+// sharedPathMap returns the path cache for the render pass, copied for the
+// reason sharedPreviewBytes copies: the View reads it outside this lock while
+// the fetch goroutine may still be writing.
+func (i *Interactive) sharedPathMap() map[string]string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.sharedPathsSession != i.cfg.CarrierSession || len(i.sharedPaths) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(i.sharedPaths))
+	for id, path := range i.sharedPaths {
+		out[id] = path
 	}
 	return out
 }
@@ -242,6 +444,7 @@ func (i *Interactive) refreshSharedFiles() error {
 		i.sharedFiles = files
 		i.sharedFilesSession = sess
 	}
+	i.recordSharedPathsLocked(sess, files)
 	i.mu.Unlock()
 	i.invalidate()
 	return nil

@@ -27,7 +27,7 @@ import (
 //   - X11: xclip.
 func ReadClipboardImagePNG() ([]byte, bool, error) {
 	switch {
-	case isWSL():
+	case IsWSL():
 		return readClipboardImagePNGWSL()
 	case os.Getenv("WAYLAND_DISPLAY") != "":
 		return runClipboardImageCmd("wl-paste", "--no-newline", "--type", "image/png")
@@ -47,7 +47,7 @@ func ReadClipboardImagePNG() ([]byte, bool, error) {
 // message for a clipboard that never received anything is worse than saying so.
 func WriteClipboardText(s string) error {
 	switch {
-	case isWSL():
+	case IsWSL():
 		return runClipboardWrite(s, "clip.exe")
 	case os.Getenv("WAYLAND_DISPLAY") != "":
 		return runClipboardWrite(s, "wl-copy")
@@ -69,16 +69,6 @@ func runClipboardWrite(s, name string, args ...string) error {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
-}
-
-// isWSL reports whether we're under the Windows Subsystem for Linux, where
-// the only clipboard is Windows' own (reached via powershell.exe).
-func isWSL() bool {
-	if os.Getenv("WSL_INTEROP") != "" || os.Getenv("WSL_DISTRO_NAME") != "" {
-		return true
-	}
-	b, _ := os.ReadFile("/proc/sys/kernel/osrelease")
-	return strings.Contains(strings.ToLower(string(b)), "microsoft")
 }
 
 const maxNativeClipboardImageBytes = 32 << 20

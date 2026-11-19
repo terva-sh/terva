@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -203,6 +204,18 @@ func (v *View) renderSharedFileCard(f SharedFile, width int) []string {
 		lines = appendTruncated(lines, margin+"    "+th.FG256(th.Muted, caption), width)
 	}
 
+	// Where the file is, or how to get it. An expired share shows neither: the
+	// sweeper is entitled to the bytes, and a path printed under "expired" is
+	// an invitation to open something that may already be gone.
+	if expiry != "expired" {
+		switch path := v.sharedPath(f.ID); {
+		case path != "":
+			lines = append(lines, sharedPathRows(th, margin+"    ", path, width)...)
+		case v.SharedRemote:
+			lines = appendTruncated(lines, margin+"    "+th.FG256(th.Muted, i18n.T("/shared lists this file, and s saves a copy here")), width)
+		}
+	}
+
 	// The preview, when this client fetched the bytes and the terminal can draw
 	// them. Absent bytes are the normal case for everything that is not an
 	// image, and for an image whose fetch has not landed yet, so the card is
@@ -213,6 +226,64 @@ func (v *View) renderSharedFileCard(f SharedFile, width int) []string {
 		}
 	}
 	return lines
+}
+
+// sharedPath returns the local path this client holds for a share, or "".
+//
+// A path that SanitizeLabel would change is treated as no path. The row exists
+// to be copied and opened, so a cleaned-up path is worse than none: it reads as
+// a location and names a file that is not there.
+func (v *View) sharedPath(id string) string {
+	if v.SharedPaths == nil || id == "" {
+		return ""
+	}
+	path := v.SharedPaths[id]
+	if path == "" || SanitizeLabel(path) != path {
+		return ""
+	}
+	return path
+}
+
+// sharedPathRows renders a share's path, wrapped to the terminal width.
+//
+// Wrapped, never truncated, which is the one place a card departs from
+// appendTruncated. A name or a caption cut short still says what it is. A path
+// cut short opens nothing, and the path is the whole reason this row exists on
+// a terminal that cannot draw the picture.
+//
+// The break falls wherever the row fills, not at a separator: the pieces must
+// rejoin into the exact path, and a wrap that prefers "/" would leave rows of
+// uneven length without making a selection any easier to rejoin.
+func sharedPathRows(th Theme, indent, path string, width int) []string {
+	avail := width - visibleWidth(indent)
+	if avail < 1 {
+		// A terminal narrower than the indent. Drop the indent rather than
+		// the path: alignment is cosmetic and the path is not.
+		indent, avail = "", width
+		if avail < 1 {
+			avail = 1
+		}
+	}
+	var rows []string
+	var piece strings.Builder
+	used := 0
+	flush := func() {
+		rows = append(rows, indent+th.FG256(th.FG, piece.String()))
+		piece.Reset()
+		used = 0
+	}
+	for _, r := range path {
+		w := runewidthRune(r)
+		if used > 0 && used+w > avail {
+			flush()
+		}
+		piece.WriteRune(r)
+		used += w
+	}
+	if piece.Len() > 0 {
+		flush()
+	}
+	return rows
 }
 
 // appendTruncated appends a rendered row clipped to the terminal width, so a
@@ -245,8 +316,8 @@ func (v *View) sharedPreview(id string) []byte {
 	return v.SharedPreviews[id]
 }
 
-// sharedPreviewSig fingerprints the preview bytes this client holds for the
-// shares m carries, for the render cache key.
+// sharedCardSig fingerprints what this client holds for the shares m carries
+// beyond the record itself, for the render cache key.
 //
 // hashMessage already covers Meta["shared"], but that is the share HANDLE,
 // which arrives with the message. The picture does not: interactive fetches it
@@ -256,10 +327,15 @@ func (v *View) sharedPreview(id string) []byte {
 // its empty frame for the rest of the session; only a resize, ctrl+o or
 // /compact happens to evict it.
 //
-// Length rather than content, the same trade the tool-result case in
-// hashMessage makes: a fetch either has the bytes or does not, and the carrier
-// does not swap a drawn image for a different one of identical length.
-func (v *View) sharedPreviewSig(m provider.Message) uint64 {
+// The path is the same trap by the same route. It comes from the store's
+// listing, a second request that lands after the card is on screen, so it is
+// in the fingerprint for the reason the bytes are.
+//
+// Length rather than content for the bytes, the same trade the tool-result
+// case in hashMessage makes: a fetch either has the bytes or does not, and the
+// carrier does not swap a drawn image for a different one of identical length.
+// The path is hashed whole, because it is short and it is what the row prints.
+func (v *View) sharedCardSig(m provider.Message) uint64 {
 	// The overwhelmingly common case is a message with no shares at all, and
 	// this runs for every message on every frame — so no JSON parse unless
 	// there is something to parse.
@@ -270,6 +346,12 @@ func (v *View) sharedPreviewSig(m provider.Message) uint64 {
 	for _, f := range parseSharedFiles(m.Meta) {
 		h = fnv64aWrite(h, []byte(f.ID))
 		h = fnv64aWriteUint(h, uint64(len(v.sharedPreview(f.ID))))
+		path := v.sharedPath(f.ID)
+		h = fnv64aWriteUint(h, uint64(len(path)))
+		h = fnv64aWrite(h, []byte(path))
+	}
+	if v.SharedRemote {
+		h = fnv64aWriteUint(h, 1)
 	}
 	return h
 }

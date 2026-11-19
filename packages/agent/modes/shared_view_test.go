@@ -29,6 +29,9 @@ type shareCarrier struct {
 	list    []ctrlproto.SharedFileEntry
 	err     error
 	release chan struct{} // when non-nil, a fetch parks until this closes
+	// listRelease does the same for a listing, so a test can put a session
+	// switch between the request and its answer.
+	listRelease chan struct{}
 	// name overrides the filename a fetch reports. The daemon sanitized this
 	// name on the way in, so a hostile one can only arrive across a machine
 	// boundary — which is exactly the case the save path re-checks.
@@ -40,13 +43,21 @@ func newShareCarrier(data map[string][]byte) *shareCarrier {
 }
 
 func (c *shareCarrier) SharedFiles(context.Context, string) ([]ctrlproto.SharedFileEntry, error) {
+	// The listing is read under the lock, and the count moves before any park:
+	// a test changes the listing between two calls, and one that waits on the
+	// count must be able to see a call that is still held open.
 	c.mu.Lock()
 	c.listed++
+	list := c.list
+	release := c.listRelease
 	c.mu.Unlock()
+	if release != nil {
+		<-release
+	}
 	if c.err != nil {
 		return nil, c.err
 	}
-	return c.list, nil
+	return list, nil
 }
 
 // listCount is how many times the listing verb was called — the only

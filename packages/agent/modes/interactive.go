@@ -987,6 +987,30 @@ type Interactive struct {
 	sharedPreviewsFetched map[string]bool
 	sharedPreviewsSession string
 
+	// sharedPaths caches where each share on screen lives on this machine,
+	// keyed by share id, for the path row of a transcript card. It comes from
+	// the same shared.list answer the /shared panel reads, asked for when a
+	// card appears rather than when the panel opens.
+	//
+	// sharedPathsAsked is the claim, as sharedPreviewsFetched is for the
+	// bytes: it also remembers an id the listing did not return (a swept
+	// file), which stops a card from re-listing the store on every repaint.
+	//
+	// Filled on a local carrier only, and keyed by session like the rest.
+	sharedPaths        map[string]string
+	sharedPathsAsked   map[string]bool
+	sharedPathsSession string
+
+	// sharedCardRev counts every change to what the cards draw from the two
+	// caches above: a preview's bytes landing, a path landing, a session
+	// switch dropping both. Guarded by mu.
+	//
+	// 🔑 It exists for the idle chat cache (chatCacheKey). That cache is keyed
+	// on the transcript revision, and this data arrives through the carrier
+	// after the card is drawn without moving it. Without the count, a share on
+	// a resumed session keeps the card it was first painted with.
+	sharedCardRev uint64
+
 	// sharedFiles caches the shared.list answer backing the /shared panel.
 	// Filled on open and on the panel's r key: no push event exists for a
 	// share landing, so the panel's freshness is the same as /worktree's.

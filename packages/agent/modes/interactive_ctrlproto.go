@@ -271,6 +271,11 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	i.sharedPreviews = nil
 	i.sharedPreviewsFetched = nil
 	i.sharedPreviewsSession = id
+	// The paths go with the bytes, for the same reason.
+	i.sharedPaths = nil
+	i.sharedPathsAsked = nil
+	i.sharedPathsSession = id
+	i.sharedCardRev++
 	i.armCarrierBind()
 	if info.Provider != "" {
 		i.cfg.Provider = info.Provider

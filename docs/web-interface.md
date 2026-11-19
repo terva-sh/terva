@@ -476,6 +476,13 @@ resolve handles over two read-only ctrlproto verbs, `shared.list` and
 `shared.fetch` (see [controllers.md](controllers.md)), which any carrier can
 serve because they need no route at all. See [slash-commands.md](slash-commands.md).
 
+A terminal that draws no image leaves that card with a name and nothing to do
+with it, so on the daemon's own machine the card also prints the file's path.
+The path comes from `shared.list` and not from the transcript record, which
+stays a handle: the record reaches every client, and a path is true on one host
+only. A TUI attached from another machine shows no path and points at `/shared`
+instead. See [tui.md](tui.md#shared-files).
+
 `$TERVA_HOME/shared` is deliberately **not** a sandbox root, unlike the inbound
 `attachments/`. The agent publishes through the tool, never by writing there, so
 a grant would buy it nothing and would let a jailed session read every other

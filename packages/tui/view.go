@@ -110,6 +110,17 @@ type View struct {
 	// resolves, and the daemon may be another machine (terva attach), so the
 	// bytes arrive through the carrier or not at all.
 	SharedPreviews map[string][]byte
+	// SharedPaths maps a share id to where its bytes are on THIS machine, so
+	// a card can name a file the user can open. It is the answer for a
+	// terminal that draws no image at all, where the card is otherwise a name
+	// and nothing to do with it. Filled by the host from the store's listing,
+	// and only on a local carrier: the listing's path names the daemon's
+	// disk, and on another machine that path is at best a dead end.
+	SharedPaths map[string]string
+	// SharedRemote says the share store is on another machine (terva attach).
+	// A card then has no path to show, so it says how to pull a copy instead
+	// of leaving the user with a name alone.
+	SharedRemote bool
 	// Now is the clock the shared-file expiry column reads. Nil means
 	// time.Now; a test pins it so "6d left" is assertable rather than a race
 	// against the store's TTL.
@@ -223,14 +234,15 @@ type msgCacheKey struct {
 	// belongs in the key for exactly the reason expandAll does.
 	thinkingOpen bool
 	toolDisplay  ToolDisplayMode
-	// previews fingerprints the shared-file images this client has fetched
-	// for the message. Unlike everything else here it is View state rather
-	// than message state, and it is in the key for the same reason
+	// shareCards fingerprints what this client holds for the message's
+	// shared-file cards beyond the record itself: the fetched image bytes
+	// and the resolved paths. Unlike everything else here it is View state
+	// rather than message state, and it is in the key for the same reason
 	// expandAll is: renderMessage reads it, so a render made without it is
-	// not interchangeable with one made with it. See sharedPreviewSig.
-	previews uint64
+	// not interchangeable with one made with it. See sharedCardSig.
+	shareCards uint64
 	// hyperlinks is the OSC 8 emission state renderMessage read. Same
-	// reason as expandAll and previews: a render made with hyperlinks off
+	// reason as expandAll and shareCards: a render made with hyperlinks off
 	// is not interchangeable with one made with them on. In production
 	// this is set once before the first paint and never moves, so the
 	// field costs a comparison and buys the cache being correct if that
@@ -965,7 +977,7 @@ func (v *View) renderMessageCached(m provider.Message, width int, turnOpen, thin
 		thinkingOpen:   thinkingOpen,
 		toolDisplay:    v.ToolDisplay,
 		turnOpen:       turnOpen,
-		previews:       v.sharedPreviewSig(m),
+		shareCards:     v.sharedCardSig(m),
 		hyperlinks:     HyperlinksEnabled(),
 	}
 	if v.renderCache != nil {

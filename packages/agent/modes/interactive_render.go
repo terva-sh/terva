@@ -34,6 +34,10 @@ type chatCacheKey struct {
 	expandAll       bool
 	toolDisplay     tui.ToolDisplayMode
 	tailLimit       int
+	// sharedCards is the revision of what the shared-file cards draw beyond
+	// the transcript: fetched preview bytes and resolved paths. Both land
+	// after the card is first painted and leave agentRev where it was.
+	sharedCards uint64
 }
 
 // frameSnapshot is one frame's copy of every input the chat build
@@ -194,6 +198,7 @@ func (i *Interactive) chatCacheKey2(cols int, snap frameSnapshot) (chatCacheKey,
 		expandAll:       i.view.ExpandAll,
 		toolDisplay:     i.view.ToolDisplay,
 		tailLimit:       i.view.TailLimit,
+		sharedCards:     i.sharedCardRevision(),
 	}, true
 }
 
@@ -259,7 +264,13 @@ func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	// per frame; the fetch itself runs off this goroutine and repaints when it
 	// lands, because the render path must never block on the wire.
 	i.view.SharedPreviews = i.sharedPreviewBytes()
-	i.fetchSharedPreviews(transcriptShares(i.view.Messages))
+	shares := transcriptShares(i.view.Messages)
+	i.fetchSharedPreviews(shares)
+	// The path row, on the same terms: what has landed goes to the renderer,
+	// and what has not is asked for once, off this goroutine.
+	i.view.SharedPaths = i.sharedPathMap()
+	i.view.SharedRemote = i.sharedStoreIsRemote()
+	i.fetchSharedPaths(shares)
 	// Live streaming/tool rows are appended to the chat buffer (not
 	// hoisted into a separate live block above the editor). That keeps
 	// the renderer's diff view append-only: when a tool finishes the

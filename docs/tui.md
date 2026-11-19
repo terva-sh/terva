@@ -1,8 +1,8 @@
 # The terva TUI
 
 Everything interactive mode does beyond typing prompts: attaching to a
-daemon, the status bar, copying text out, sessions, inline images, message
-queueing, and key bindings.
+daemon, the status bar, copying text out, sessions, inline images, shared
+files, message queueing, and key bindings.
 
 The slash-command catalog has its own page, [slash-commands.md](slash-commands.md).
 Flags and run modes live in [cli.md](cli.md).
@@ -246,6 +246,16 @@ When a tool returns an image (for example `read` on a PNG), terva renders it inl
 | `off`, `none` | Always use the text placeholder. |
 
 Frames containing images are full-repainted (no differential diff) to prevent stale image pixels from lingering through scroll. That costs one terminal flash per image-containing frame; set `TERVA_INLINE_IMAGES=off` if that bothers you.
+
+## Shared files
+
+When the agent hands you a file with `share_file`, a card appears under the tool call: the name, the kind, the size, how long the bytes have left, and the caption if the agent wrote one. An image small enough to pull (2 MiB) also gets an inline preview on a terminal that draws images.
+
+Most terminals do not draw images. Windows Terminal, the usual host of a WSL session, is one of them. So the card also shows **the file's full path**, and you can open that path with whatever does show a picture. The path wraps across rows at a narrow width and is never cut short, because a path with its end missing opens nothing. If you select a wrapped path with the mouse, the copy carries the line breaks; `c` in `/shared` copies the exact path to the clipboard.
+
+The path appears only when terva runs on the same machine as the files. Under `terva attach` the store is on the daemon's host, and its path means nothing on yours. The card says so, and points you at `/shared`, where `s` saves a copy into your working directory. A share whose time has run out shows neither, because its bytes may already be gone.
+
+`/shared` lists every file the session handed over, with copy, open, and save. See [slash-commands.md](slash-commands.md).
 
 ## Redraw rate
 
