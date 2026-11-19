@@ -24,6 +24,44 @@ terva's built-in provider catalog includes:
 - **Catalog**: models baked into terva, covering Claude, GPT/Codex, Gemini/Gemma, Kimi/Moonshot, DeepSeek, Groq-hosted Llama/Gemma/Compound, OpenRouter-routed models, Bedrock model ids, Vertex model ids, Azure OpenAI deployments, Copilot models, and other provider-specific catalog entries.
 - **Speculative**: IDs that appear in the upstream generator but aren't live on the public API yet. They'll 404 today and start working the moment the provider ships them.
 
+### Defaults and retirement dates
+
+The defaults apply when you have not selected a model:
+
+| Entry point or provider | Default | Endpoint |
+|---|---|---|
+| Provider SDK fallback | `claude-sonnet-5-5` | Anthropic Messages |
+| CLI `anthropic` | `claude-opus-5-5` | Anthropic Messages |
+| `openai` | `gpt-5.2` | OpenAI Chat Completions |
+| `openai-responses` and `openai-codex` | `gpt-6-sol` | Their respective Responses backends |
+| `openrouter` | `anthropic/claude-sonnet-5.5` | OpenRouter Chat Completions |
+
+The November 19, 2026 cleanup replaces expiring defaults. Anthropic retires
+Sonnet 4.5 on November 30, and OpenAI retires GPT-5 on December 11.
+GPT-5.2 supports Chat Completions with function calls. GPT-6 tool calls
+require Responses, so selecting GPT-6 also requires a Responses provider.
+GPT-5.2 costs $1.75 per million input tokens and $14 per million output tokens.
+GPT-5 costs $1.25 and $10, respectively.
+OpenRouter's public model list independently confirms its Sonnet 5.5 seed.
+That seed has a one-million-token context and no long-context surcharge.
+
+These default changes preserve explicit selections of models that remain available.
+Models with future retirement dates remain in this catalog update.
+The cleanup removes already retired public OpenAI IDs and removes
+Responses-only models from the plain `openai` catalog.
+If your selected ID is absent from the active catalog, the existing resolver
+warns and uses the provider default. It can also repair a stale configuration selection.
+Public API retirement alone does not establish Codex subscription or reseller availability.
+Those routes retain their separate entries. Discovery and user overrides
+can still supply IDs outside the built-in catalog.
+
+Sources: OpenAI [retirements](https://developers.openai.com/api/docs/deprecations),
+[GPT-5.2](https://developers.openai.com/api/docs/models/gpt-5.2), and
+[GPT-6 endpoint requirements](https://developers.openai.com/api/docs/guides/latest-model);
+Anthropic [retirements](https://platform.claude.com/docs/en/about-claude/model-deprecations);
+and the [OpenRouter model list](https://openrouter.ai/api/v1/models).
+These sources were checked on November 19, 2026.
+
 ### Amazon Bedrock discovery
 
 Bedrock discovery uses SigV4 credentials to call `ListFoundationModels` and
@@ -379,41 +417,30 @@ against. Re-derive them from the picker rather than trusting the numbers here.
 
 #### When there is no pattern to write
 
-Not every provider's clutter has a shape a glob can catch. OpenCode Go serves 45
-models while its documentation lists 32. The extra thirteen are twelve superseded
-releases and previews (`glm-5` and `glm-5.1`, where `5.2` and `5.3` are current;
-`kimi-k2.5`, where `k2.6` and `k3` are; `hy3-preview`, where `hy3` has shipped),
-plus an alpha. Nothing about an id says "older", so this one is a plain
-enumeration:
+Not every preference has a shape a glob can catch. OpenCode Go serves 32
+models; this example leaves 27 visible. Suppose you prefer newer GLM, HY,
+Kimi, and GPT models and want to hide these particular alternatives. A plain
+enumeration expresses that choice:
 
 ```json
 {
   "hidden_models": [
-    "opencode-go/deepseek-flash",
-    "opencode-go/glm-5",
-    "opencode-go/glm-5.1",
-    "opencode-go/grok-4.5",
-    "opencode-go/hy3-preview",
-    "opencode-go/kimi-k2.5",
-    "opencode-go/mimo-v2-omni",
-    "opencode-go/mimo-v2-pro",
-    "opencode-go/minimax-m2.5",
-    "opencode-go/omen-alpha",
-    "opencode-go/qwen3.5-plus",
-    "opencode-go/qwen3.6-plus",
-    "opencode-go/qwen3.7-max"
+    "opencode-go/glm-5.2",
+    "opencode-go/gpt-5.6-luna",
+    "opencode-go/hy3",
+    "opencode-go/hy4-preview",
+    "opencode-go/kimi-k2.7-code"
   ]
 }
 ```
 
-All thirteen still work: they are served, they keep their real context windows,
-and `--model` reaches them. This only trims the picker to the lineup OpenCode
-currently documents.
+These models still work: they keep their real context windows, and `--model`
+reaches them. The list changes only what the picker shows.
 
-Treat it as a snapshot, not a rule. Where `openrouter/*` keeps working as that
-gateway adds models, this list goes stale the moment OpenCode retires one or
-ships another, and nothing will tell you it has. That is the trade an
-enumeration makes.
+Review an enumeration when the provider changes its catalog. A retired ID
+matches nothing, and a newly added model remains visible. The repository
+checks this example against its catalog, but it cannot check your personal
+preferences.
 
 ### Naming a model in a setting
 
@@ -453,6 +480,49 @@ whose provider you are not logged in to, the refusal gives the other form.
 
 What each provider does differently once you are reaching it. Getting a
 credential to it in the first place is [providers.md](providers.md).
+
+### GPT-6.2 Sol, GPT-6.2 Astra, and GPT-6.1 Terra
+
+Select the new models through either Responses provider:
+
+```bash
+terva --provider openai-responses --model gpt-6.2-sol
+terva --provider openai-codex --model gpt-6.2-astra
+terva --provider openai-responses --model gpt-6.1-terra
+```
+
+Your account must have access to the selected model. Catalog presence does
+not grant access. The provider defaults remain `gpt-6-sol`.
+
+All three models require the Responses API for tool calls. Terva therefore
+exposes them on `openai-responses` and `openai-codex`. They have a
+1,050,000-token context limit and a 128,000-token output limit. The default
+working window is 272,000 tokens to avoid the long-context surcharge.
+
+Sol 6.2 and Astra 6.2 accept `low`, `medium`, `high`, `xhigh`, and `max`
+reasoning efforts. Terra 6.1 also accepts `none`. Terva maps `minimum` to
+`low`, `maximum` to `xhigh`, and `max` to native `max`. For Sol 6.2 and
+Astra 6.2, `off` omits the effort field and uses the server default.
+For Terra 6.1, `off` sends an explicit `none` effort.
+Compatible gateways inherit the declared effort sets during discovery.
+
+Standard prices per million tokens, checked on November 17, 2026:
+
+| Model | Input | Cached input | Cache write | Output |
+|---|---:|---:|---:|---:|
+| `gpt-6.2-sol` | $2 | $0.10 | $2.50 | $10 |
+| `gpt-6.2-astra` | $8 | $0.40 | $10 | $40 |
+| `gpt-6.1-terra` | $1 | $0.05 | $1.25 | $5 |
+
+Cache writes use the 30-minute retention rate. Above 272,000 input tokens,
+input and cache rates double for the whole request. Output costs 1.5 times
+the standard rate. Native image output remains unasserted pending live
+verification of the subscription route.
+
+See the official [Sol 6.2](https://developers.openai.com/api/docs/models/gpt-6.2-sol),
+[Astra 6.2](https://developers.openai.com/api/docs/models/gpt-6.2-astra), and
+[Terra 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
+model pages, and the [GPT-6.2 migration guide](https://developers.openai.com/api/docs/guides/latest-model).
 
 ### GPT-6 Astra
 
@@ -677,7 +747,20 @@ By default this uses:
 - model: `deepseek-v4-pro`
 - base URL: `https://api.deepseek.com/v1`
 
-Catalog ships with `deepseek-v4-pro` (reasoning) and `deepseek-v4-flash`. These are exactly the IDs returned by `GET https://api.deepseek.com/models` today. You can add additional model IDs to `models.json` under the `deepseek` provider.
+The catalog includes `deepseek-v4-pro` and `deepseek-flash`. Flash resolves
+to DeepSeek V4.1 Flash and accepts images through the OpenAI-compatible API.
+The legacy IDs `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` still
+resolve to that same model. Pro remains text-only.
+
+The static cost estimate uses DeepSeek's peak rates, checked on November 17,
+2026. Prices per million tokens are $0.30 input, $0.006 cached input, and
+$1.20 output for Flash. Pro costs $1.32 input, $0.044 cached input, and
+$3.96 output. DeepSeek charges half these rates off-peak. Terva does not
+select a price by the time of the request or the Chinese holiday calendar.
+You can override the rates in `models.json`.
+
+See DeepSeek's [pricing](https://api-docs.deepseek.com/quick_start/pricing)
+and [vision guide](https://api-docs.deepseek.com/guides/vision).
 
 The direct V4 models accept `none`, `low`, `high`, and `max` reasoning effort.
 The `max` setting sends the distinct `max` value. The `maximum` setting maps to `high` through the shared effort ladder.
@@ -693,7 +776,9 @@ Use `/login` and pick **api key** to paste a DeepSeek key. terva probes `/v1/mod
 
 > **Auth model: API key only.** DeepSeek does not offer a subscription OAuth flow. The `/login subscription` step lists only Anthropic, OpenAI Codex, Kimi, and GitHub Copilot; DeepSeek shows up only under `/login → api key`.
 
-> **Text only at the wire level.** DeepSeek's chat-completions endpoint currently rejects the multimodal content schema (`unknown variant image_url, expected text`), so the V4 catalog rows are tagged `image-input: false`. The drop is **capability-keyed, not provider-keyed**: for any model without the image-input capability, whether a DeepSeek V4 row, a vision-less local GGUF, or a `{"image-input": false}` entry in your `models.json`, terva silently drops `ImageBlock` parts from outgoing user/tool messages and keeps only the text. Switching back to a vision-capable model (Claude, GPT-5, Gemini) re-sends the image normally because the session file still stores it.
+Terva omits images from requests to models without the `image-input`
+capability, including DeepSeek Pro. The session retains the images, so a
+later request to Flash or another vision model can send them.
 
 For a custom-compatible endpoint (mirror, gateway, self-host):
 

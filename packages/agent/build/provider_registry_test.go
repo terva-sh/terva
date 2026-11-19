@@ -1,7 +1,13 @@
 package build
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"terva.sh/terva/packages/provider"
 )
@@ -86,8 +92,11 @@ func TestProviderRegistryNewClientDispatch(t *testing.T) {
 // DefaultModelForProvider reads the registry: explicit defaults win,
 // no-default providers return empty, unknown falls back to the global.
 func TestProviderRegistryDefaultModel(t *testing.T) {
-	if got := DefaultModelForProvider("openai"); got != "gpt-5" {
-		t.Errorf("openai default = %q, want gpt-5", got)
+	if got := DefaultModelForProvider("openai"); got != "gpt-5.2" {
+		t.Errorf("openai default = %q, want gpt-5.2", got)
+	}
+	if got := DefaultModelForProvider("openrouter"); got != "anthropic/claude-sonnet-5.5" {
+		t.Errorf("openrouter default = %q, want anthropic/claude-sonnet-5.5", got)
 	}
 	if got := DefaultModelForProvider("ollama"); got != "" {
 		t.Errorf("ollama default = %q, want empty", got)
@@ -102,7 +111,7 @@ func TestProviderRegistryDefaultModel(t *testing.T) {
 		t.Errorf("anthropic default = %q, want claude-opus-5-5", got)
 	}
 	// Both Responses routes default to GPT-6 Sol. Plain openai stays on
-	// gpt-5 above, because GPT-6 is absent from its Chat Completions catalog.
+	// GPT-5.2 because GPT-6 tool calls require Responses.
 	for _, id := range []string{"openai-codex", "openai-responses"} {
 		if got := DefaultModelForProvider(id); got != "gpt-6-sol" {
 			t.Errorf("%s default = %q, want gpt-6-sol", id, got)
@@ -110,5 +119,102 @@ func TestProviderRegistryDefaultModel(t *testing.T) {
 	}
 	if got := DefaultModelForProvider("totally-unknown"); got != provider.DefaultModel.ID {
 		t.Errorf("unknown default = %q, want global %q", got, provider.DefaultModel.ID)
+	}
+}
+
+func TestReplacementDefaultsToolRoundTrip(t *testing.T) {
+	for _, prov := range []string{"openai", "openrouter"} {
+		t.Run(prov, func(t *testing.T) {
+			id := DefaultModelForProvider(prov)
+			m, err := provider.Builtin().FindModel(prov, id)
+			if err != nil || m.Speculative {
+				t.Fatalf("default unavailable offline: %+v, %v", m, err)
+			}
+			if m.MaxOutput != 128000 {
+				t.Fatalf("default output limit = %d, want 128000", m.MaxOutput)
+			}
+			requests := make(chan map[string]any, 2)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					t.Errorf("unexpected endpoint: %s", r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				messages, ok := body["messages"].([]any)
+				if !ok || len(messages) == 0 {
+					t.Errorf("messages must be a nonempty array: %+v", body)
+					http.Error(w, "invalid messages", http.StatusBadRequest)
+					return
+				}
+				requests <- body
+				w.Header().Set("Content-Type", "text/event-stream")
+				if len(messages) == 1 {
+					fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+				} else {
+					fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+				}
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			defer srv.Close()
+			client := (Resolved{Provider: prov, Credential: "test-key", AuthMethod: "apikey", BaseURL: srv.URL + "/v1"}).NewClient()
+			provider.WithCatalog(client, provider.Builtin())
+			req := provider.Request{Model: id, Reasoning: "high", ReasoningSet: true,
+				Messages: []provider.Message{{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "Look it up"}}}},
+				Tools:    []provider.Tool{{Name: "lookup", Description: "Look up a value", Schema: json.RawMessage(`{"type":"object","properties":{}}`)}},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			for turn := 0; turn < 2; turn++ {
+				stream, err := client.Stream(ctx, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var done *provider.EventDone
+				for event := range stream {
+					if e, ok := event.(provider.EventDone); ok {
+						done = &e
+					}
+				}
+				if done == nil || done.Err != nil {
+					t.Fatalf("stream failed: %+v", done)
+				}
+				body := <-requests
+				if body["model"] != id || body["reasoning_effort"] != "high" || body["max_completion_tokens"] != float64(m.MaxOutput) {
+					t.Fatalf("incorrect default request: %+v", body)
+				}
+				if tools, ok := body["tools"].([]any); !ok || len(tools) != 1 {
+					t.Fatalf("missing tool definition: %+v", body)
+				}
+				if turn == 0 {
+					if len(done.Message.Content) != 1 {
+						t.Fatalf("missing assembled tool call: %+v", done.Message)
+					}
+					call, ok := done.Message.Content[0].(provider.ToolCallBlock)
+					if !ok || call.ID != "call_1" || call.Name != "lookup" || string(call.Arguments) != "{}" {
+						t.Fatalf("invalid tool call: %+v", done.Message)
+					}
+					req.Messages = append(req.Messages, done.Message, provider.Message{Role: provider.RoleTool,
+						Content: []provider.Content{provider.ToolResultBlock{CallID: call.ID, Content: []provider.Content{provider.TextBlock{Text: "42"}}}}})
+				} else {
+					messages := body["messages"].([]any)
+					last, ok := messages[len(messages)-1].(map[string]any)
+					if !ok {
+						t.Fatalf("tool result must be a message object: %+v", messages)
+					}
+					if last["role"] != "tool" || last["tool_call_id"] != "call_1" || last["content"] != "42" {
+						t.Fatalf("tool result lost on follow-up: %+v", messages)
+					}
+					if len(done.Message.Content) != 1 || done.Message.Content[0] != (provider.TextBlock{Text: "done"}) {
+						t.Fatalf("missing final text: %+v", done.Message)
+					}
+				}
+			}
+		})
 	}
 }

@@ -133,7 +133,7 @@ func TestCodexResponseFailedTransience(t *testing.T) {
 // "xhigh". The Responses request builder must send it verbatim.
 func TestOpenAIResponsesModelsUseNativeMaxReasoningEffort(t *testing.T) {
 	c := NewOpenAICodex("token", "acct", "").(*codexClient)
-	for _, model := range []string{"gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"} {
+	for _, model := range []string{"gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"} {
 		t.Run(model, func(t *testing.T) {
 			wire, err := c.buildRequest(Request{Model: model, Reasoning: "max", ReasoningSet: true})
 			if err != nil {
@@ -143,6 +143,40 @@ func TestOpenAIResponsesModelsUseNativeMaxReasoningEffort(t *testing.T) {
 				t.Fatalf("reasoning = %+v, want effort=max", wire.Reasoning)
 			}
 		})
+	}
+}
+
+func TestGPT62ResponsesToolRequests(t *testing.T) {
+	clients := map[string]*codexClient{
+		"openai-codex":     NewOpenAICodex("token", "acct", "").(*codexClient),
+		"openai-responses": NewOpenAIResponses("key", "").(*renamedClient).inner.(*codexClient),
+	}
+	for provider, client := range clients {
+		for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+			for _, tc := range []struct{ level, effort string }{
+				{"off", ""}, {"minimum", "low"}, {"medium", "medium"}, {"maximum", "xhigh"}, {"max", "max"},
+			} {
+				t.Run(provider+"/"+model+"/"+tc.level, func(t *testing.T) {
+					body, err := client.buildRequest(Request{
+						Model: model, Reasoning: tc.level, ReasoningSet: true,
+						Tools: []Tool{{Name: "read", Description: "Read a file", Schema: []byte(`{"type":"object","properties":{}}`)}},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if body.Model != model || len(body.Tools) != 1 || body.ToolChoice != "auto" || body.Store {
+						t.Fatalf("invalid tool request: %+v", body)
+					}
+					if tc.effort == "" {
+						if body.Reasoning != nil {
+							t.Fatalf("off must omit effort: %+v", body.Reasoning)
+						}
+					} else if body.Reasoning == nil || body.Reasoning.Effort != tc.effort {
+						t.Fatalf("reasoning = %+v, want %s", body.Reasoning, tc.effort)
+					}
+				})
+			}
+		}
 	}
 }
 

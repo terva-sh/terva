@@ -199,6 +199,9 @@ func TestCuratedLongContextSheets(t *testing.T) {
 	openai := map[string]PriceTier{
 		"gpt-6-astra":   {Above: 272000, Input: 20, Output: 75, CacheRead: 2, CacheWrite: 25},
 		"gpt-6.1-sol":   {Above: 272000, Input: 4, Output: 15, CacheRead: 0.2, CacheWrite: 5},
+		"gpt-6.1-terra": {Above: 272000, Input: 2, Output: 7.5, CacheRead: 0.1, CacheWrite: 2.5},
+		"gpt-6.2-sol":   {Above: 272000, Input: 4, Output: 15, CacheRead: 0.2, CacheWrite: 5},
+		"gpt-6.2-astra": {Above: 272000, Input: 16, Output: 60, CacheRead: 0.8, CacheWrite: 20},
 		"gpt-6-sol":     {Above: 272000, Input: 4, Output: 15, CacheRead: 0.4, CacheWrite: 5},
 		"gpt-6-luna":    {Above: 272000, Input: 0.2, Output: 0.75, CacheRead: 0.02, CacheWrite: 0.25},
 		"gpt-5.6-sol":   {Above: 272000, Input: 8, Output: 30, CacheRead: 0.8, CacheWrite: 10},
@@ -208,13 +211,12 @@ func TestCuratedLongContextSheets(t *testing.T) {
 		"gpt-5.4":       {Above: 272000, Input: 5, Output: 22.5, CacheRead: 0.5},
 	}
 	cases := map[string]PriceTier{
-		"anthropic/claude-haiku-5-5":             {Above: 100000, Input: 0.5, Output: 2.5, CacheRead: 0.05, CacheWrite: 0.625},
-		"openrouter/anthropic/claude-sonnet-4.5": {Above: 200000, Input: 6, Output: 22.5, CacheRead: 0.6, CacheWrite: 7.5},
+		"anthropic/claude-haiku-5-5": {Above: 100000, Input: 0.5, Output: 2.5, CacheRead: 0.05, CacheWrite: 0.625},
 	}
 	for id, sheet := range openai {
 		cases["openai-codex/"+id] = sheet
 	}
-	for _, id := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} {
+	for _, id := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-sol", "gpt-6-luna"} {
 		cases["openai-responses/"+id] = openai[id]
 	}
 	for _, id := range []string{"gpt-5.4", "gpt-5.5"} {

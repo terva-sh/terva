@@ -3,7 +3,7 @@ package provider
 import "testing"
 
 func TestDirectDeepSeekReasoningEfforts(t *testing.T) {
-	for _, id := range []string{"deepseek-v4-pro", "deepseek-v4-flash"} {
+	for _, id := range []string{"deepseek-v4-pro", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"} {
 		m, err := Builtin().FindModel("deepseek", id)
 		if err != nil {
 			t.Fatal(err)

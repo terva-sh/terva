@@ -40,7 +40,7 @@ func TestReasoningEffectMatchesWhatTheBuilderSends(t *testing.T) {
 		{
 			name:     "anthropic budget",
 			provider: "anthropic",
-			id:       "claude-opus-4-1-20250805",
+			id:       "claude-haiku-4-5",
 			send: func(t *testing.T, m Model, level string) (int, string) {
 				c := &anthropicClient{catalogRef: catalogRef{testReg}}
 				out, err := c.buildRequest(Request{
@@ -95,7 +95,7 @@ func TestReasoningEffectMatchesWhatTheBuilderSends(t *testing.T) {
 		{
 			name:     "openai-compatible effort",
 			provider: "groq",
-			id:       "deepseek-r1-distill-llama-70b",
+			id:       "openai/gpt-oss-120b",
 			send: func(t *testing.T, m Model, level string) (int, string) {
 				c := &openaiClient{catalogRef: catalogRef{testReg}}
 				out, err := c.buildRequest(Request{

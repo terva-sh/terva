@@ -80,7 +80,7 @@ var providerSpecs = []providerSpec{
 	},
 	{
 		id:           "openai",
-		defaultModel: "gpt-5",
+		defaultModel: "gpt-5.2",
 		envHint:      "OPENAI",
 		apiKeyEnv:    []string{"OPENAI_API_KEY"},
 		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenAI(c.Credential, c.BaseURL) },
@@ -214,7 +214,7 @@ var providerSpecs = []providerSpec{
 	},
 	{
 		id:           "openrouter",
-		defaultModel: "anthropic/claude-sonnet-4.5",
+		defaultModel: "anthropic/claude-sonnet-5.5",
 		envHint:      "OPENROUTER",
 		apiKeyEnv:    []string{"OPENROUTER_API_KEY"},
 		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenRouter(c.Credential, c.BaseURL) },

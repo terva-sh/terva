@@ -1,6 +1,10 @@
 package workspace
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
@@ -83,11 +87,11 @@ func TestLaddersActuallyDeduplicate(t *testing.T) {
 func TestLadderIdentityTracksTheWireNotTheModel(t *testing.T) {
 	codex, err := modelreg.FindModel("openai-codex", "gpt-5.6-sol")
 	if err != nil {
-		t.Skipf("fixture missing: %v", err)
+		t.Fatal(err)
 	}
-	gem, err := modelreg.FindModel("google", "gemini-3-pro-preview")
+	gem, err := modelreg.FindModel("google", "gemini-3.1-pro-preview")
 	if err != nil {
-		t.Skipf("fixture missing: %v", err)
+		t.Fatal(err)
 	}
 	tbl := newLadderTable()
 	if a, b := tbl.keyFor(codex), tbl.keyFor(gem); a == b {
@@ -126,9 +130,16 @@ func TestModelsWithNoReasoningControlGetNoKey(t *testing.T) {
 // The wire rows must carry the CLAMPED budget the builder sends, not the
 // ladder constant — the same bug the TUI dialog had, arriving by a new route.
 func TestWireRowsCarryTheClampedBudget(t *testing.T) {
-	m, err := modelreg.FindModel("anthropic", "claude-opus-4-1-20250805")
+	m, err := modelreg.FindModel("anthropic", "claude-haiku-4-5")
 	if err != nil {
-		t.Skipf("fixture missing: %v", err)
+		t.Fatal(err)
+	}
+	m.MaxOutput = 32000
+	reg := provider.NewRegistry()
+	reg.SetUserModels([]provider.Model{m})
+	m, err = reg.FindModel(m.Provider, m.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	tbl := newLadderTable()
 	// Intern BEFORE reading the table: Go evaluates the index expression's
@@ -149,4 +160,38 @@ func TestWireRowsCarryTheClampedBudget(t *testing.T) {
 		t.Errorf("maximum carries the unclamped ladder constant %d; this model's "+
 			"output cap forces it lower", want)
 	}
+	if wire := clampedBudgetOnWire(t, reg, m.ID); maximum.Budget != wire {
+		t.Fatalf("ladder budget = %d, wire budget = %d", maximum.Budget, wire)
+	}
+}
+
+func clampedBudgetOnWire(t *testing.T, cat provider.ModelCatalog, id string) int {
+	t.Helper()
+	captured := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		captured <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+	client := provider.WithCatalog(provider.NewAnthropic("synthetic", srv.URL), cat)
+	events, err := client.Stream(t.Context(), provider.Request{Model: id, Reasoning: "maximum", ReasoningSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range events {
+	}
+	var wire struct {
+		Thinking struct {
+			Budget int `json:"budget_tokens"`
+		} `json:"thinking"`
+	}
+	if err := json.Unmarshal(<-captured, &wire); err != nil {
+		t.Fatal(err)
+	}
+	return wire.Thinking.Budget
 }

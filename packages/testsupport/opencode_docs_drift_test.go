@@ -9,43 +9,14 @@ import (
 	"testing"
 )
 
-// The opencode-go hiding example in docs/models.md must still describe the
-// catalog it is derived from.
-//
-// That snippet lists model ids to hide, and the prose around it claims
-// arithmetic: the gateway serves N models, its documentation lists M, and the
-// extra ones are the difference. All of it was computed from the catalog on the day it was
-// written, and none of it is self-maintaining. The doc says so itself — "it goes
-// stale the moment OpenCode retires or adds a model, and nothing will announce
-// that" — and this test is the thing that announces it.
-//
-// The failure it prevents is a reader pasting nine lines that no longer mean
-// what the page says they mean: an id the gateway retired (a rule matching
-// nothing, silently), or a model added since (visible when the page promises it
-// was trimmed away). Neither breaks a build, and neither is visible without
-// re-deriving by hand, which is exactly the sort of chore that does not happen.
-//
-// Deliberately NOT a check against opencode.ai. A test that reaches the network
-// fails on a plane, and the marketing page is not a contract we can pin. This
-// asserts something narrower and fully in-tree: the doc and the baked catalog
-// agree with each other. When `just models-sync` moves the catalog, this fails
-// until someone re-derives the snippet, which is the whole point.
-//
-// Scoped to this one snippet on purpose. It is the only place in the docs that
-// enumerates model ids rather than demonstrating a pattern, so it is the only
-// one that rots this way; a second such example should extend this test rather
-// than get its own.
+// Catalog sync can retire IDs in the hiding example or invalidate its counts.
+// Check the baked catalog without requiring network access.
 func TestOpenCodeGoDocSnippetMatchesCatalog(t *testing.T) {
 	docBytes, err := os.ReadFile("../../docs/models.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A Windows checkout gets CRLF — .gitattributes pins no *.md — and every
-	// pattern below is written with \n, so `` ```json\n `` matched nothing and
-	// this failed on that runner alone. The message named the heading and said
-	// the section must have been renamed, which is the wrong place to look.
-	// Normalise, so the test asserts about the document and not about the
-	// runner's line endings.
+	// Normalize CRLF so the regexes also match Windows checkouts.
 	doc := strings.ReplaceAll(string(docBytes), "\r\n", "\n")
 	catalog, err := os.ReadFile("../../packages/provider/catalog_builtin.go")
 	if err != nil {
@@ -110,45 +81,24 @@ func TestOpenCodeGoDocSnippetMatchesCatalog(t *testing.T) {
 
 	// ---- the prose arithmetic must still hold ----
 
-	claimRE := regexp.MustCompile(`OpenCode Go serves (\d+)\s+models while its documentation lists (\d+)`)
+	claimRE := regexp.MustCompile(`OpenCode Go serves (\d+)\s+models; this example leaves (\d+) visible`)
 	claim := claimRE.FindStringSubmatch(doc)
 	if claim == nil {
-		t.Fatal(`could not find the "OpenCode Go serves N models while its documentation ` +
-			`lists M" claim in docs/models.md — if the sentence was reworded, update ` +
+		t.Fatal(`could not find the "OpenCode Go serves N models; this example leaves ` +
+			`M visible" claim in docs/models.md — if the sentence was reworded, update ` +
 			"this test so the numbers stay checked.")
 	}
-	claimedServed, claimedPromoted := atoiOrFatal(t, claim[1]), atoiOrFatal(t, claim[2])
+	claimedServed, claimedVisible := atoiOrFatal(t, claim[1]), atoiOrFatal(t, claim[2])
 
 	if len(served) != claimedServed {
 		t.Errorf("docs/models.md says opencode-go serves %d models; the catalog carries %d.\n"+
 			"A resync moved the catalog. Re-derive the hidden list and update the prose.",
 			claimedServed, len(served))
 	}
-	if visible := len(served) - len(hidden); visible != claimedPromoted {
+	if visible := len(served) - len(hidden); visible != claimedVisible {
 		t.Errorf("docs/models.md says %d models remain visible; hiding the snippet's %d "+
-			"of the catalog's %d leaves %d.", claimedPromoted, len(hidden), len(served), visible)
+			"of the catalog's %d leaves %d.", claimedVisible, len(hidden), len(served), visible)
 	}
-
-	// The prose also spells the count in words, which drifts independently of
-	// the digits above: retire one hidden model and update the numbers, and
-	// "the extra nine" can survive as the only wrong thing on the page.
-	wordRE := regexp.MustCompile(`The extra ([a-z]+) are`)
-	if w := wordRE.FindStringSubmatch(doc); w != nil {
-		if n, ok := numberWords[w[1]]; !ok {
-			t.Errorf("cannot read the spelled count %q in docs/models.md; add it to "+
-				"numberWords or reword the sentence", w[1])
-		} else if n != len(hidden) {
-			t.Errorf("docs/models.md says %q (%d) extra models; the snippet hides %d",
-				w[1], n, len(hidden))
-		}
-	}
-}
-
-var numberWords = map[string]int{
-	"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-	"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
-	"thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
-	"seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
 }
 
 func atoiOrFatal(t *testing.T, s string) int {

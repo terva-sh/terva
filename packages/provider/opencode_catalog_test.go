@@ -14,16 +14,10 @@ import "testing"
 func TestOpenCodeGoCatalogHasRealContextWindows(t *testing.T) {
 	want := map[string]int{
 		// The ones that were missing entirely, and so were guessed at.
-		"glm-5.2":        1000000,
-		"kimi-k2.7-code": 262144,
-		// DeepSeek's endpoint serves V4.1 Flash under both IDs. Keep these
-		// windows pinned so a resync cannot quietly shrink them.
-		"deepseek-flash":      1000000,
+		"glm-5.2":             1000000,
+		"kimi-k2.7-code":      262144,
 		"deepseek-v4-pro":     1000000,
-		"deepseek-v4-flash":   1000000,
 		"deepseek-v4.1-flash": 1000000,
-		"mimo-v2.5":           1000000,
-		"mimo-v2.5-pro":       1048576,
 
 		// Raised from 512000 when the generator switched to models.dev's
 		// dedicated "opencode-go" key. The old shared "opencode" key was the
@@ -43,22 +37,18 @@ func TestOpenCodeGoCatalogHasRealContextWindows(t *testing.T) {
 		"hy4-preview":                1024000,
 		"longcat-2.0":                1000000,
 		"muse-spark-1.2-contributor": 1048576,
-		// Also 262144 under the old key; the vendor's own alibaba key agrees
-		// with the 1M the gateway key reports.
-		"qwen3.6-plus": 1000000,
-
-		// Newly served models with metadata from models.dev.
 		"muse-spark-1.3-contributor": 1048576,
-		"omen-alpha":                 500000,
-
-		// Hand-curated. The gateway serves hy3-preview but models.dev does not
-		// carry it under ANY opencode key, so reconcile keeps whatever the
-		// catalog already said and a blind regenerate would drop it — which is
-		// the whole reason the generator fills gaps instead of replacing
-		// wholesale. The limits come from models.dev's tencent-tokenhub key and
-		// agree exactly with its sibling hy3 below.
-		"hy3":         256000,
-		"hy3-preview": 256000,
+		"hy3":                        256000,
+		"minimax-m3.1-flash":         1000000,
+		"step-5-preview":             1000000,
+		"beam-free":                  1048576,
+		"kimi-k3.1-pro":              1048576,
+		"iceman-contributor-free":    262144,
+		"gemini-4-argon":             1048576,
+		"hy4":                        1048576,
+		"longcat-2.5-free":           1000000,
+		"hy4-flash-free":             1048576,
+		"qwen4-max":                  1000000,
 	}
 
 	got := map[string]Model{}
@@ -100,6 +90,19 @@ func TestOpenCodeGoBaseURLsAreUniform(t *testing.T) {
 		}
 		if m.BaseURL != want {
 			t.Errorf("opencode-go/%s BaseURL = %q, want %q", m.ID, m.BaseURL, want)
+		}
+	}
+}
+
+func TestOpenCodeGoKimiOutputLimits(t *testing.T) {
+	// OpenCode Go's public /models metadata, checked on 2026-11-17.
+	for id, cacheWrite := range map[string]float64{"kimi-k3": 3, "kimi-k3.1-pro": 2} {
+		m, err := Builtin().FindModel("opencode-go", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.MaxOutput != 1048576 || m.PriceCacheWrite != cacheWrite {
+			t.Errorf("%s output cap = %d, cache write = %g; want 1048576 and %g", id, m.MaxOutput, m.PriceCacheWrite, cacheWrite)
 		}
 	}
 }

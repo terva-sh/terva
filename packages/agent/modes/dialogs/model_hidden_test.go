@@ -17,7 +17,7 @@ func hiddenCatalog(t *testing.T) {
 	modelreg.ResetCatalogLayers()
 	t.Cleanup(modelreg.ResetCatalogLayers)
 	modelreg.SetUserModels([]provider.Model{
-		{Provider: "openrouter", ID: "anthropic/claude-sonnet-4.5"},
+		{Provider: "openrouter", ID: "anthropic/claude-sonnet-5.5"},
 		{Provider: "openrouter", ID: "deepseek/deepseek-r1"},
 		{Provider: "openrouter", ID: "meta/llama-3.1"},
 	})
@@ -171,7 +171,7 @@ func TestAProviderWhoseModelsAreAllHiddenKeepsItsRow(t *testing.T) {
 	hiddenCatalog(t)
 	d := NewModelDialog()
 	d.Open("", []string{"openrouter"}, nil, []string{
-		"openrouter/anthropic/claude-sonnet-4.5",
+		"openrouter/anthropic/claude-sonnet-5.5",
 		"openrouter/deepseek/deepseek-r1",
 		"openrouter/meta/llama-3.1",
 	})

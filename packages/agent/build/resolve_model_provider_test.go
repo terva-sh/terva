@@ -5,43 +5,31 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/modelreg"
+	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
 
-// Resolve drops a model that belongs to a DIFFERENT provider than the one it
-// resolved — config naming gpt-5 while the provider fell back to anthropic is
-// an incoherent pair, and the provider's default is the better answer.
-//
-// It used to ask that question of a BARE catalogue lookup, which returns the
-// first match across every provider. Several ids are listed under more than one:
-// gpt-5-pro and gpt-5-codex appear under azure-openai-responses before openai.
-// So for openai/gpt-5-pro the bare answer was "that is an azure model", the pair
-// looked incoherent, and Resolve silently substituted openai's default. The user
-// asked for gpt-5-pro by name — on the command line, in config, or through
-// /model — and got gpt-5, with no warning anywhere (the warn-and-repair path
-// below handles unknown ids, and this id is perfectly well known).
-//
-// This is the same provider-hop the /model verb guards against by resolving a
-// bare id against the current provider first. Resolve is handed the provider
-// outright, so it never had to guess.
+// A bare lookup can find another provider's copy of a shared ID first.
+// Resolve must check the requested provider before substituting its default.
 func TestResolveKeepsAModelListedUnderSeveralProviders(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
-
-	// The premise: an id whose FIRST catalogue match is a different provider,
-	// which is also a real model under the one we are asking for. If the
-	// catalogue is ever reordered so this is no longer true, the test is
-	// vacuous rather than wrong — say so instead of passing quietly.
-	const id = "gpt-5-pro"
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
+	const id = "test-shared-model"
+	modelreg.SetUserModels([]provider.Model{
+		{Provider: "azure-openai-responses", ID: id},
+		{Provider: "openai", ID: id},
+	})
 	bare, err := modelreg.FindModel("", id)
 	if err != nil {
-		t.Skipf("%s is no longer in the catalogue", id)
+		t.Fatal(err)
 	}
 	if _, err := modelreg.FindModel("openai", id); err != nil {
-		t.Skipf("%s is no longer an openai model", id)
+		t.Fatal(err)
 	}
-	if bare.Provider == "openai" {
-		t.Skipf("%s now resolves to openai bare; the collision this guards is gone", id)
+	if bare.Provider != "azure-openai-responses" {
+		t.Fatalf("fixture must resolve the other provider first, got %q", bare.Provider)
 	}
 
 	r, err := Resolve(Args{Provider: "openai", Model: id}, false)

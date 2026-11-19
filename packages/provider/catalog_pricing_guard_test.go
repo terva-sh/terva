@@ -208,10 +208,20 @@ type cacheRateRule struct {
 }
 
 var anthropicCacheRateExceptions = map[string]cacheRateRule{
-	// Anthropic footnotes this in the pricing table: "Cache hits and refreshes
-	// on Claude Fable 5.1 and Claude Mythos 5.1 are priced at 0.025x the base
-	// input price. All other models use the standard 0.1x multiplier." Add
-	// Mythos 5.1 here when a row for it lands.
+	"anthropic/claude-fable-5-2": {
+		read: 0.025, write: 1.25,
+		why: "published $0.20 cache read against an $8 base",
+	},
+	"anthropic/claude-sonnet-5-5": {
+		read: 0.05, write: 1.25,
+		why: "published $0.10 cache read against a $2 base",
+	},
+	"openrouter/anthropic/claude-sonnet-5.5": {
+		read: 0.05, write: 1.25,
+		why: "OpenRouter's model list on 2026-11-19 publishes $0.10 cache reads against a $2 base",
+	},
+	// Fable 5.1 and Mythos 5.1 also use 0.025x cache reads.
+	// Add Mythos 5.1 here when a row for it lands.
 	"anthropic/claude-fable-5-1": {
 		read: 0.025, write: 1.25,
 		why: "published 0.025x cache read, the Fable/Mythos 5.1 exception",
@@ -230,10 +240,6 @@ var anthropicCacheRateExceptions = map[string]cacheRateRule{
 	// per MTok for a read and $0.30 for a write against a $0.25 base, which is
 	// 0.12x and 1.2x. Those are rounded to whole cents, not derived, so they
 	// are right and the multipliers are what does not apply.
-	"anthropic/claude-3-haiku-20240307": {
-		read: 0.12, write: 1.2,
-		why: "Claude 3 Haiku's published rates are rounded to cents, not derived",
-	},
 	"cloudflare-ai-gateway/claude-3-haiku": {
 		read: 0.12, write: 1.2,
 		why: "passes through Claude 3 Haiku's rounded published rates",

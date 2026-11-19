@@ -332,28 +332,17 @@ func mergeCaps(base, over map[Capability]bool) map[Capability]bool {
 
 // catalog is the hardcoded, read-only list of supported models.
 // Prices are USD per 1M tokens. The list is curated to what terva's
-// clients (Anthropic Messages + OpenAI Chat Completions) can actually
-// talk to; models that are only reachable through the OpenAI Responses
-// API (o1-pro, o3-pro, gpt-5-pro) are omitted.
+// clients can use on each provider endpoint. Public Responses models
+// live in extra_models.go, separately from Chat Completions models.
 var catalog = []Model{
+	{
+		Provider: "anthropic", ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5",
+		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.1, PriceCacheWrite: 2.5,
+	},
 	// ---- Anthropic / Claude 4.x ----
 	{
 		Provider: "anthropic", ID: "claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5 (latest)",
-		ContextWindow: 200000, MaxOutput: 64000, Reasoning: true,
-		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
-	},
-	{
-		Provider: "anthropic", ID: "claude-opus-4-1", DisplayName: "Claude Opus 4.1 (latest)",
-		ContextWindow: 200000, MaxOutput: 32000, Reasoning: true,
-		PriceInput: 15, PriceOutput: 75, PriceCacheRead: 1.5, PriceCacheWrite: 18.75,
-	},
-	{
-		Provider: "anthropic", ID: "claude-opus-4-0", DisplayName: "Claude Opus 4 (latest)",
-		ContextWindow: 200000, MaxOutput: 32000, Reasoning: true,
-		PriceInput: 15, PriceOutput: 75, PriceCacheRead: 1.5, PriceCacheWrite: 18.75,
-	},
-	{
-		Provider: "anthropic", ID: "claude-sonnet-4-0", DisplayName: "Claude Sonnet 4 (latest)",
 		ContextWindow: 200000, MaxOutput: 64000, Reasoning: true,
 		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
 	},
@@ -363,29 +352,13 @@ var catalog = []Model{
 		PriceInput: 1, PriceOutput: 5, PriceCacheRead: 0.1, PriceCacheWrite: 1.25,
 	},
 
-	// ---- Anthropic / Claude 3.x (legacy) ----
-	{
-		Provider: "anthropic", ID: "claude-3-7-sonnet-20250219", DisplayName: "Claude Sonnet 3.7",
-		ContextWindow: 200000, MaxOutput: 64000, Reasoning: true,
-		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
-	},
-	{
-		Provider: "anthropic", ID: "claude-3-5-sonnet-20241022", DisplayName: "Claude Sonnet 3.5 v2",
-		ContextWindow: 200000, MaxOutput: 8192, Reasoning: false,
-		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
-	},
-	{
-		Provider: "anthropic", ID: "claude-3-5-haiku-latest", DisplayName: "Claude Haiku 3.5 (latest)",
-		ContextWindow: 200000, MaxOutput: 8192, Reasoning: false,
-		PriceInput: 0.8, PriceOutput: 4, PriceCacheRead: 0.08, PriceCacheWrite: 1,
-	},
-	{
-		Provider: "anthropic", ID: "claude-3-opus-20240229", DisplayName: "Claude Opus 3",
-		ContextWindow: 200000, MaxOutput: 4096, Reasoning: false,
-		PriceInput: 15, PriceOutput: 75, PriceCacheRead: 1.5, PriceCacheWrite: 18.75,
-	},
-
 	// ---- Anthropic / Claude 5.x ----
+	// Anthropic's model overview and pricing page, checked on 2026-11-17.
+	{
+		Provider: "anthropic", ID: "claude-fable-5-2", DisplayName: "Claude Fable 5.2",
+		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 8, PriceOutput: 40, PriceCacheRead: 0.2, PriceCacheWrite: 10,
+	},
 	// Live on the public API since 2026-09-01, so this row is NOT
 	// speculative: swarm tier resolution skips speculative rows, and a
 	// released model must stay reachable there.
@@ -456,38 +429,40 @@ var catalog = []Model{
 	},
 
 	// ---- DeepSeek ----
-	// The current public DeepSeek API exposes the V4 family on
-	// api.deepseek.com/v1: Pro (1.6T/49B, reasoning-heavy) and Flash
-	// (284B/13B, cheaper), both 1M context, dual thinking/non-thinking
-	// modes. (deepseek-chat / deepseek-reasoner retire 2026-07-24, mapping
-	// to Flash's non-thinking / thinking modes.)
-	//
-	// CapImageInput is asserted FALSE on purpose. The V4 models are
-	// natively multimodal, but the DeepSeek *API* does not expose image
-	// input yet — the chat-completions endpoint has no image content type
-	// and rejects multimodal parts ("unknown variant `image_url`, expected
-	// `text`"). CapImageInput governs the wire, so it must track what the
-	// API accepts, not the model's latent ability: terva keeps images in
-	// the transcript but drops them from outgoing DeepSeek requests (switch
-	// to a vision model to send them). Flip to true when DeepSeek ships a
-	// vision endpoint. An earlier row optimistically marked V4 vision-
-	// capable and conflated those two things (see
-	// docs/plans/archive/model-capabilities.md).
+	// DeepSeek's pricing and vision guides, checked on 2026-11-17.
+	// The static sheet uses peak prices; off-peak requests cost half.
+	// Legacy Flash IDs still resolve to V4.1 Flash with vision support.
 	{
 		Provider: "deepseek", ID: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
 		ReasoningEfforts: []string{"none", "low", "high", "max"},
-		PriceInput:       0.435, PriceOutput: 0.87, PriceCacheRead: 0.003625,
+		PriceInput:       1.32, PriceOutput: 3.96, PriceCacheRead: 0.044,
 		BaseURL: "https://api.deepseek.com",
 		Caps:    map[Capability]bool{CapImageInput: false},
 	},
 	{
-		Provider: "deepseek", ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash",
+		Provider: "deepseek", ID: "deepseek-flash", DisplayName: "DeepSeek V4.1 Flash",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
 		ReasoningEfforts: []string{"none", "low", "high", "max"},
-		PriceInput:       0.14, PriceOutput: 0.28, PriceCacheRead: 0.0028,
+		PriceInput:       0.3, PriceOutput: 1.2, PriceCacheRead: 0.006,
 		BaseURL: "https://api.deepseek.com",
-		Caps:    map[Capability]bool{CapImageInput: false},
+		Caps:    map[Capability]bool{CapImageInput: true},
+	},
+	{
+		Provider: "deepseek", ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4.1 Flash (legacy ID)",
+		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
+		ReasoningEfforts: []string{"none", "low", "high", "max"},
+		PriceInput:       0.3, PriceOutput: 1.2, PriceCacheRead: 0.006,
+		BaseURL: "https://api.deepseek.com",
+		Caps:    map[Capability]bool{CapImageInput: true},
+	},
+	{
+		Provider: "deepseek", ID: "deepseek-v4-flash-vision-exp", DisplayName: "DeepSeek V4.1 Flash (legacy vision ID)",
+		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
+		ReasoningEfforts: []string{"none", "low", "high", "max"},
+		PriceInput:       0.3, PriceOutput: 1.2, PriceCacheRead: 0.006,
+		BaseURL: "https://api.deepseek.com",
+		Caps:    map[Capability]bool{CapImageInput: true},
 	},
 
 	// ---- Kimi / Kimi Code ----
@@ -584,11 +559,6 @@ var catalog = []Model{
 		ContextWindow: 1047576, MaxOutput: 32768, Reasoning: false,
 		PriceInput: 0.4, PriceOutput: 1.6, PriceCacheRead: 0.1,
 	},
-	{
-		Provider: "openai", ID: "gpt-4.1-nano", DisplayName: "GPT-4.1 nano",
-		ContextWindow: 1047576, MaxOutput: 32768, Reasoning: false,
-		PriceInput: 0.1, PriceOutput: 0.4, PriceCacheRead: 0.03,
-	},
 
 	// ---- OpenAI / GPT-4o family ----
 	{
@@ -604,24 +574,9 @@ var catalog = []Model{
 
 	// ---- OpenAI / reasoning models ----
 	{
-		Provider: "openai", ID: "o4-mini", DisplayName: "o4-mini",
-		ContextWindow: 200000, MaxOutput: 100000, Reasoning: true,
-		PriceInput: 1.1, PriceOutput: 4.4, PriceCacheRead: 0.28,
-	},
-	{
 		Provider: "openai", ID: "o3", DisplayName: "o3",
 		ContextWindow: 200000, MaxOutput: 100000, Reasoning: true,
 		PriceInput: 2, PriceOutput: 8, PriceCacheRead: 0.5,
-	},
-	{
-		Provider: "openai", ID: "o3-mini", DisplayName: "o3-mini",
-		ContextWindow: 200000, MaxOutput: 100000, Reasoning: true,
-		PriceInput: 1.1, PriceOutput: 4.4, PriceCacheRead: 0.55,
-	},
-	{
-		Provider: "openai", ID: "o1", DisplayName: "o1",
-		ContextWindow: 200000, MaxOutput: 100000, Reasoning: true,
-		PriceInput: 15, PriceOutput: 60, PriceCacheRead: 7.5,
 	},
 
 	// ---- Google / Gemini ----
@@ -643,55 +598,47 @@ var catalog = []Model{
 	// so it resolves offline. The full OpenRouter catalog is discovered live
 	// (DiscoverOpenRouter) and overlays this on refresh.
 	{
-		Provider: "openrouter", ID: "anthropic/claude-sonnet-4.5", DisplayName: "Claude Sonnet 4.5 (OpenRouter)",
-		ContextWindow: 1000000, ContextSurchargeAt: 200000, MaxOutput: 64000, Reasoning: true,
-		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
-		LongContextTiers: []PriceTier{{Above: 200000, Input: 6, Output: 22.5, CacheRead: 0.6, CacheWrite: 7.5}},
-		BaseURL:          openrouterDefaultBaseURL,
+		Provider: "openrouter", ID: "anthropic/claude-sonnet-5.5", DisplayName: "Claude Sonnet 5.5 (OpenRouter)",
+		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.1, PriceCacheWrite: 2.5,
+		BaseURL: openrouterDefaultBaseURL,
 	},
 
-	// ---- Speculative: Anthropic ----
+	// ---- Anthropic / earlier current models ----
 	{
 		Provider: "anthropic", ID: "claude-opus-4-5", DisplayName: "Claude Opus 4.5 (latest)",
 		ContextWindow: 200000, MaxOutput: 64000, Reasoning: true,
 		PriceInput: 5, PriceOutput: 25, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
-		Speculative: true,
 	},
 	{
 		Provider: "anthropic", ID: "claude-opus-4-6", DisplayName: "Claude Opus 4.6",
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 5, PriceOutput: 25, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
-		Speculative: true,
 	},
 	{
 		Provider: "anthropic", ID: "claude-opus-4-7", DisplayName: "Claude Opus 4.7",
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
 		PriceInput: 5, PriceOutput: 25, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
-		Speculative: true,
 	},
 	{
 		Provider: "anthropic", ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8",
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
 		PriceInput: 5, PriceOutput: 25, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
-		Speculative: true,
 	},
 	{
 		Provider: "anthropic", ID: "claude-opus-5", DisplayName: "Claude Opus 5",
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
 		PriceInput: 5, PriceOutput: 25, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
-		Speculative: true,
 	},
 	{
 		Provider: "anthropic", ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6",
 		ContextWindow: 1000000, MaxOutput: 64000, Reasoning: true,
 		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
-		Speculative: true,
 	},
 	{
 		Provider: "anthropic", ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5",
-		ContextWindow: 1000000, MaxOutput: 64000, Reasoning: true, AdaptiveThinking: true,
-		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
-		Speculative: true,
+		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.2, PriceCacheWrite: 2.5,
 	},
 	{
 		Provider: "anthropic", ID: "claude-fable-5", DisplayName: "Claude Fable 5",
@@ -700,10 +647,9 @@ var catalog = []Model{
 		// 1.25x for a 5-minute write. This row carried the Opus 5 pair
 		// (0.5 / 6.25) and halved every cached-token cost it reported.
 		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 1, PriceCacheWrite: 12.5,
-		Speculative: true,
 	},
 
-	// ---- Speculative: OpenAI ----
+	// ---- OpenAI / additional Chat Completions models ----
 	// Public OpenAI API route. The ChatGPT/Codex subscription route is
 	// represented separately below as provider "openai-codex".
 	{
@@ -716,7 +662,6 @@ var catalog = []Model{
 		Provider: "openai", ID: "gpt-5.2", DisplayName: "GPT-5.2",
 		ContextWindow: 400000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 1.75, PriceOutput: 14, PriceCacheRead: 0.175,
-		Speculative: true,
 	},
 	{
 		Provider: "openai", ID: "gpt-5.4", DisplayName: "GPT-5.4",
@@ -804,6 +749,29 @@ var catalog = []Model{
 		LongContextTiers: []PriceTier{{Above: 272000, Input: 0.4, Output: 1.8, CacheRead: 0.04, CacheWrite: 0.5}},
 		Caps:             map[Capability]bool{CapImageOutput: true},
 	},
+	// Specifications and standard 30-minute cache prices from OpenAI's model
+	// pages, checked on 2026-11-17. Tool calls require the Responses API.
+	{
+		Provider: "openai-codex", ID: "gpt-6.2-astra", DisplayName: "GPT-6.2 Astra",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6AstraEfforts,
+		PriceInput: 8, PriceOutput: 40, PriceCacheRead: 0.4, PriceCacheWrite: 10,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 16, Output: 60, CacheRead: 0.8, CacheWrite: 20}},
+	},
+	{
+		Provider: "openai-codex", ID: "gpt-6.2-sol", DisplayName: "GPT-6.2 Sol",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6AstraEfforts,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.1, PriceCacheWrite: 2.5,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 4, Output: 15, CacheRead: 0.2, CacheWrite: 5}},
+	},
+	{
+		Provider: "openai-codex", ID: "gpt-6.1-terra", DisplayName: "GPT-6.1 Terra",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6Efforts,
+		PriceInput: 1, PriceOutput: 5, PriceCacheRead: 0.05, PriceCacheWrite: 1.25,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 2, Output: 7.5, CacheRead: 0.1, CacheWrite: 2.5}},
+	},
 	{
 		Provider: "openai-codex", ID: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
@@ -856,7 +824,7 @@ var catalog = []Model{
 //   - "maximum" and "max" reach xhigh and max, where the undeclared mapper
 //     clamps both to "high" for fear of an unknown server.
 //
-// Astra and GPT-6.1 Sol list no "none", so off omits the field for them.
+// Astra and Sol 6.1/6.2 list no "none", so off omits the field for them.
 // Every row with a given id must declare the same set, or discovery drops
 // the list rather than pick one (see sameEffortSet). The codex and Responses
 // rows therefore share these variables.
@@ -868,7 +836,7 @@ var (
 // DefaultModel is used when the user does not specify one.
 //
 // Unstable: terva's own convention carries no promise before 1.0.
-var DefaultModel Model = catalog[0] // claude-sonnet-4-5
+var DefaultModel Model = catalog[0] // claude-sonnet-5-5
 
 // ----- active (merged) catalog -----
 //

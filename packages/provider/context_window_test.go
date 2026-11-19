@@ -82,6 +82,9 @@ func TestGPT6CatalogRoutes(t *testing.T) {
 		{"gpt-6-sol", 2, 10, 0.2, 2.5},
 		{"gpt-6-luna", 0.1, 0.5, 0.01, 0.125},
 		{"gpt-6.1-sol", 2, 10, 0.1, 2.5},
+		{"gpt-6.1-terra", 1, 5, 0.05, 1.25},
+		{"gpt-6.2-sol", 2, 10, 0.1, 2.5},
+		{"gpt-6.2-astra", 8, 40, 0.4, 10},
 	} {
 		for _, provider := range []string{"openai-responses", "openai-codex"} {
 			t.Run(provider+"/"+tc.id, func(t *testing.T) {

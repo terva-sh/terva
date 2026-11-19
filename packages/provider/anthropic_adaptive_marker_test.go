@@ -174,8 +174,7 @@ func TestOpus55CatalogRow(t *testing.T) {
 			got.ContextWindow, got.MaxOutput)
 	}
 
-	// The speculative claude-opus-5 row is a separate model that three tests
-	// resolve by exact id. Adding 5.5 must not have replaced it.
+	// Opus 5 remains a distinct model when a newer minor release lands.
 	if _, err := testReg.FindModel("anthropic", "claude-opus-5"); err != nil {
 		t.Errorf("claude-opus-5 no longer resolves (%v); 5.5 lands beside it, "+
 			"not instead of it", err)

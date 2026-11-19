@@ -1,6 +1,11 @@
 package dialogs
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -40,7 +45,7 @@ func TestEffortWireModelsAreNeverDescribedInTokens(t *testing.T) {
 		// no budget. Was gemini-3-pro-preview until Google retired it upstream
 		// (404 "no longer available") and it left the catalog.
 		{"google", "gemini-3.1-pro-preview"},
-		{"groq", "deepseek-r1-distill-llama-70b"},
+		{"groq", "openai/gpt-oss-120b"},
 	} {
 		d := NewReasoningDialog()
 		d.Open("", "", mustModel(t, tc.provider_, tc.id))
@@ -57,7 +62,14 @@ func TestEffortWireModelsAreNeverDescribedInTokens(t *testing.T) {
 // wording": a model that genuinely takes a budget must still show one, and it
 // must be the CLAMPED value the builder sends rather than the ladder constant.
 func TestBudgetWireModelsStillShowTheirClampedBudget(t *testing.T) {
-	m := mustModel(t, "anthropic", "claude-opus-4-1-20250805")
+	m := mustModel(t, "anthropic", "claude-haiku-4-5")
+	m.MaxOutput = 32000
+	reg := provider.NewRegistry()
+	reg.SetUserModels([]provider.Model{m})
+	m, err := reg.FindModel(m.Provider, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	d := NewReasoningDialog()
 	d.Open("", "", m)
 
@@ -76,13 +88,51 @@ func TestBudgetWireModelsStillShowTheirClampedBudget(t *testing.T) {
 	if want.Budget == 0 {
 		t.Fatal("fixture no longer sends a budget — pick another budget-wire model")
 	}
+	wire := clampedBudgetOnWire(t, reg, m.ID)
+	if want.Budget != wire {
+		t.Fatalf("display budget = %d, wire budget = %d", want.Budget, wire)
+	}
+	if !strings.Contains(got, fmt.Sprintf("~%dk tokens of thinking", wire/1024)) {
+		t.Fatalf("display %q does not describe wire budget %d", got, wire)
+	}
+}
+
+func clampedBudgetOnWire(t *testing.T, cat provider.ModelCatalog, id string) int {
+	t.Helper()
+	captured := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		captured <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+	client := provider.WithCatalog(provider.NewAnthropic("synthetic", srv.URL), cat)
+	events, err := client.Stream(t.Context(), provider.Request{Model: id, Reasoning: "maximum", ReasoningSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range events {
+	}
+	var wire struct {
+		Thinking struct {
+			Budget int `json:"budget_tokens"`
+		} `json:"thinking"`
+	}
+	if err := json.Unmarshal(<-captured, &wire); err != nil {
+		t.Fatal(err)
+	}
+	return wire.Thinking.Budget
 }
 
 // A rung that lands on the same wire value as another says so, and names the
 // rung a user would recognize rather than whichever came first in the ladder.
 func TestCollapsedRungsNameTheCanonicalRung(t *testing.T) {
 	d := NewReasoningDialog()
-	d.Open("", "", mustModel(t, "groq", "deepseek-r1-distill-llama-70b"))
+	d.Open("", "", mustModel(t, "groq", "openai/gpt-oss-120b"))
 
 	// minimum and low both send effort "low"; "low" is the one named.
 	if got := detailFor(t, d, "minimum"); !strings.Contains(got, "same as low") {

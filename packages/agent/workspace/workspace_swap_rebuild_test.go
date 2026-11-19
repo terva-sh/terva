@@ -171,13 +171,13 @@ func TestNoRebuildReasonRevertsTheHostRoute(t *testing.T) {
 func TestASameEndpointIDSwapSurvivesARebuild(t *testing.T) {
 	w, s := swapSession(t)
 
-	if err := w.switchModel(s, "openai", "gpt-5-pro", false); err != nil {
+	if err := w.switchModel(s, "openai", "gpt-5.2", false); err != nil {
 		t.Fatalf("switchModel: %v", err)
 	}
 	s.rebuildTools("approval-mode")
 
-	if p, m := hostRoute(t, s); p != "openai" || m != "gpt-5-pro" {
-		t.Errorf("after a rebuild the host route = %s/%s, want openai/gpt-5-pro", p, m)
+	if p, m := hostRoute(t, s); p != "openai" || m != "gpt-5.2" {
+		t.Errorf("after a rebuild the host route = %s/%s, want openai/gpt-5.2", p, m)
 	}
 }
 
@@ -208,7 +208,7 @@ func TestACrossEndpointSwapDropsTheLaunchEndpointPins(t *testing.T) {
 	s2.mu.Lock()
 	s2.args.APIKey, s2.args.BaseURL = "launch-key", "http://launch.local/v1"
 	s2.mu.Unlock()
-	if err := w2.switchModel(s2, "openai", "gpt-5-pro", false); err != nil {
+	if err := w2.switchModel(s2, "openai", "gpt-5.2", false); err != nil {
 		t.Fatalf("switchModel same endpoint: %v", err)
 	}
 	if a := s2.argsSnapshot(); a.APIKey != "launch-key" || a.BaseURL != "http://launch.local/v1" {
