@@ -78,6 +78,7 @@ Agent.SetTools	method	func(reg Registry) (changed bool)
 Agent.SetToolsWithReadOnly	method	func(reg Registry, readOnly *ReadOnlySet) bool
 Agent.ShiftQueuedMessage	method	func() (QueuedMessage, bool)
 Agent.SideChannelCost	method	func() provider.Usage
+Agent.TakeQueuedMessage	method	func(index int, text string, taken func()) (QueuedMessage, bool)
 Agent.ToolForCall	method	func(ctx context.Context, name string) (context.Context, Tool, bool)
 Agent.ToolVisibility	method	func() ToolVisibility
 Agent.ToolsSnapshot	method	func() Registry
@@ -516,8 +517,10 @@ UserAnswer.Chosen	method	func() []string
 UserAnswer.Declined	field	bool
 UserAnswer.Note	field	string
 UserMessageExtras	type	struct
+UserMessageExtras.HoldQueue	field	bool
 UserMessageExtras.Meta	field	map[string]string
 UserMessageExtras.Preamble	field	string
+UserMessageExtras.QueueLead	field	int
 UserQuestion	type	struct
 UserQuestion.AllowCustom	field	bool
 UserQuestion.MultiSelect	field	bool

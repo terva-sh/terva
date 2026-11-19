@@ -597,6 +597,9 @@ func (f *fakeSvc) Queue(ctx context.Context, sess string, p QueueParams) error {
 func (f *fakeSvc) SetQueue(ctx context.Context, sess string, p QueueSetParams) error {
 	return nil
 }
+func (f *fakeSvc) SendQueued(ctx context.Context, sess string, p QueueSendParams) error {
+	return nil
+}
 func (f *fakeSvc) Cancel(ctx context.Context, sess string) error  { return nil }
 func (f *fakeSvc) Compact(ctx context.Context, sess string) error { return nil }
 func (f *fakeSvc) Clear(ctx context.Context, sess string) error   { return nil }

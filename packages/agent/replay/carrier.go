@@ -500,6 +500,9 @@ func (c *Carrier) Queue(ctx context.Context, sess string, p ctrlproto.QueueParam
 func (c *Carrier) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
 	return unsupported("queue")
 }
+func (c *Carrier) SendQueued(ctx context.Context, sess string, p ctrlproto.QueueSendParams) error {
+	return unsupported("queue")
+}
 func (c *Carrier) Compact(ctx context.Context, sess string) error { return unsupported("compact") }
 func (c *Carrier) Clear(ctx context.Context, sess string) error   { return unsupported("clear") }
 func (c *Carrier) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {

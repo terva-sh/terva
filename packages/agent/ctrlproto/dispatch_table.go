@@ -48,6 +48,9 @@ var dispatch = map[Method]handler{
 	MethodQueue: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueParams) error {
 		return svc.Queue(ctx, f.Sess, p)
 	}),
+	MethodQueueSend: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueSendParams) error {
+		return svc.SendQueued(ctx, f.Sess, p)
+	}),
 	MethodQueueSet: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p QueueSetParams) error {
 		return svc.SetQueue(ctx, f.Sess, p)
 	}),
@@ -709,6 +712,12 @@ var dispatch = map[Method]handler{
 	}),
 	MethodTalkootResume: act(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootResumeParams) error {
 		return c.ResumeTalkoot(ctx, p)
+	}),
+	MethodTalkootWakeCancel: act(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootWakeCancelParams) error {
+		return c.CancelTalkootWake(ctx, p)
+	}),
+	MethodTalkootRoutineSet: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRoutineSetParams) (TalkootRoutines, error) {
+		return c.SetTalkootRoutine(ctx, p)
 	}),
 	MethodTalkootRecruit: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRecruitParams) (SessionResult, error) {
 		info, err := c.RecruitTalkoot(ctx, p)

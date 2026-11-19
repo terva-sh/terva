@@ -2468,9 +2468,10 @@ export interface WireEvent {
   notice?: Notice
   auth?: AuthState
   replay?: ReplayState
-  // talkoot_envelope, talkoot_intro, talkoot_answer, talkoot_status,
-  // talkoot_roster, talkoot_inbox, talkoot_inbox_resolved, talkoot_beat: on a
-  // talkoot's own address (talkootAddr).
+  // talkoot_envelope, talkoot_intro, talkoot_answer, talkoot_wake,
+  // talkoot_routine, talkoot_status, talkoot_roster, talkoot_inbox,
+  // talkoot_inbox_resolved, talkoot_beat: on a talkoot's own address
+  // (talkootAddr).
   talkoot?: TalkootEvent
   stall?: WireStall
   escalation?: WireEscalation
@@ -2492,8 +2493,8 @@ export const ADDR_WORKSPACE = '#workspace'
 
 // ADDR_TALKOOT_PREFIX starts a talkoot room's address. Subscribing there needs
 // the `talkoot` group in the hello, and the room sends talkoot_envelope,
-// talkoot_intro, talkoot_answer, talkoot_status, talkoot_roster, talkoot_inbox,
-// talkoot_inbox_resolved, and talkoot_beat events. Like ADDR_WORKSPACE it is an
+// talkoot_intro, talkoot_answer, talkoot_wake, talkoot_routine, talkoot_status,
+// talkoot_roster, talkoot_inbox, talkoot_inbox_resolved, and talkoot_beat events. Like ADDR_WORKSPACE it is an
 // address, never a session id.
 export const ADDR_TALKOOT_PREFIX = '#talkoot:'
 
@@ -2730,6 +2731,7 @@ export type Verb =
   | 'post.line'
   | 'prompt'
   | 'queue'
+  | 'queue.send'
   | 'queue.set'
   | 'replay.control'
   | 'replay.state'
@@ -2784,6 +2786,8 @@ export type Verb =
   | 'talkoot.proposals'
   | 'talkoot.propose'
   | 'talkoot.resume'
+  | 'talkoot.wake_cancel'
+  | 'talkoot.routine_set'
   | 'talkoot.recruit'
   | 'talkoot.manager'
   | 'talkoot.drafts'
@@ -2891,6 +2895,140 @@ export interface TalkootView {
   members: TalkootMember[]
   held?: string[]
   chat?: ChatBridgeState
+  // The state of member wakes: whether a member may set one, the person's
+  // caps, and the open ones. Unset when the person set no policy and the team
+  // has no open wake.
+  wakes?: TalkootWakes
+  // The state of routines: whether a member may ask for one, the person's
+  // cap, and every routine of the team. Unset when the person set no policy
+  // and the team has no routine.
+  routines?: TalkootRoutines
+}
+
+// TalkootRoutines is the state of routines for one talkoot. A routine is a
+// recurring timer that a person approved from its card. `problem` says why
+// the talkoot_routines key is set and routines are still off. `routines`
+// holds the paused ones too, oldest first.
+export interface TalkootRoutines {
+  on: boolean
+  max?: number
+  problem?: string
+  // Whether the talkoot_routines key names the commands that ask for a
+  // review. Without them nothing counts a review request, and the
+  // reviews_per_day of a routine binds nothing.
+  reviews_counted?: boolean
+  routines?: TalkootRoutine[]
+}
+
+// TalkootRoutineFields are the six limits of a routine. A zero end means
+// that the routine has no end of that kind.
+export interface TalkootRoutineFields {
+  end_after_runs: number
+  end_after_days: number
+  spend_usd_per_day: number
+  reviews_per_day: number
+  follow_ups: number
+  catch_up: boolean
+}
+
+// TalkootRoutine is one routine. `id` is also the id of the proposal that
+// asked for it, and the `ref` of the room's routine lines. `kind` is watcher,
+// brief, or task, and `status` is active or paused. `next` is unset for a
+// paused routine, and `problem` says why the routine does not run at its
+// time. A record that does not read has only `id` and `problem`.
+export interface TalkootRoutine {
+  id: string
+  member: string
+  kind: string
+  schedule: string
+  prompt?: string
+  command?: string
+  fields: TalkootRoutineFields
+  ends_at?: string
+  status: string
+  approved_by?: string
+  approved_at?: string
+  changed_by?: string
+  reason?: string
+  // The runs that the routine started.
+  runs?: number
+  // What the routine's runs spent today, against fields.spend_usd_per_day.
+  spent_today_usd?: number
+  // The reviews that the routine's chains asked for today, against
+  // fields.reviews_per_day.
+  reviews_today?: number
+  // The session of the run that is at work now.
+  run_session?: string
+  next?: string
+  problem?: string
+}
+
+// TalkootRoutineAsk is the routine that a proposal asks for, as its card
+// shows it. `differs` lists each limit that the ask sets to another value
+// than the default of its kind. The card shows those and hides the rest, and
+// the room records every limit at the approval.
+export interface TalkootRoutineAsk {
+  kind: string
+  schedule: string
+  prompt?: string
+  command?: string
+  differs?: TalkootRoutineDiff[]
+  // Absent while `defaults_unknown` is set.
+  fields?: TalkootRoutineFields
+  // Set while routines are off: the daemon has no defaults to compare
+  // against. `differs` then lists each limit that the member set, with no
+  // default, and an approval is refused.
+  defaults_unknown?: boolean
+  // Names what this card shows. An approval sends it back. Absent while
+  // `defaults_unknown` is set.
+  digest?: string
+  // Whether the talkoot_routines key names the commands that ask for a
+  // review, as on TalkootRoutines.
+  reviews_counted?: boolean
+}
+
+export interface TalkootRoutineDiff {
+  field: string
+  value: string
+  // Empty when the default is not known.
+  default?: string
+}
+
+// talkoot.routine_set pauses, resumes, or deletes one routine. `routine` is
+// an id from the view's `routines.routines`. The reply is the routines as
+// they then are.
+export interface TalkootRoutineSetParams {
+  id: string
+  by: string
+  routine: string
+  action: 'pause' | 'resume' | 'delete'
+  reason?: string
+}
+
+// TalkootWakes is the state of wakes for one talkoot. A wake is one follow-up
+// turn that a member sets for itself, inside work that a person started.
+// `max_delay` is a duration such as 24h. `problem` says why the talkoot_wakes
+// key is set and wakes are still off. `open` is the soonest first.
+export interface TalkootWakes {
+  on: boolean
+  per_member?: number
+  max_delay?: string
+  problem?: string
+  open?: TalkootWake[]
+}
+
+// TalkootWake is one open wake. `id` is also the id of the envelope that the
+// firing sends, and the `ref` of the room's wake lines.
+export interface TalkootWake {
+  id: string
+  member: string
+  chain?: string
+  reason: string
+  set?: string
+  due: string
+  // Set for the follow-up of a routine's run: it starts one more run of
+  // that routine, and gives the member no turn.
+  routine?: string
 }
 
 export interface TalkootMember {
@@ -3193,6 +3331,14 @@ export interface TalkootResumeParams {
   chain?: string
 }
 
+// talkoot.wake_cancel cancels one open wake, so its member gets no turn from
+// it. `wake` is an id from the view's `wakes.open`.
+export interface TalkootWakeCancelParams {
+  id: string
+  by: string
+  wake: string
+}
+
 // talkoot.recruit creates a recruiter session for a talkoot: Hautoja unless
 // persona names another, a static greeting, and no seat. It needs steer, so
 // sessions.create cannot bind a recruiter.
@@ -3285,6 +3431,16 @@ export interface TalkootLine {
   attempt?: number
   card?: string
   outcome?: string
+  // On a wake line: the time the wake fires. `action` is set, cancelled, or
+  // dropped, `ref` is the wake's id, and `text` is the member's reason.
+  due?: string
+  // On an approved routine line: the routine with every limit's value at the
+  // approval. A routine line's `action` is approved, paused, resumed, or
+  // deleted, and its `ref` is the routine's id.
+  routine?: TalkootRoutine
+  // On a review line: the review requests of one tool call in a chain that
+  // a routine began. `member` made the call, and `ref` names the routine.
+  count?: number
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.
@@ -3427,6 +3583,9 @@ export interface TalkootProposal {
   // A new persona file that a recruiter drafted, shown whole on the card. An
   // approval writes it before the roster changes.
   persona?: TalkootPersonaDraft
+  // Set on a proposal that asks for a routine and changes no roster. An
+  // approval stores the routine and sets its timer.
+  routine?: TalkootRoutineAsk
 }
 
 // TalkootPersonaDraft is a persona file that a proposal carries.
@@ -3459,10 +3618,14 @@ export interface TalkootDecideParams {
   decision: 'approve' | 'decline'
   ops?: TalkootOp[]
   reason?: string
+  // The digest of a routine's card, as `proposal.routine.digest` gave it.
+  // An approval of a routine needs it, and the daemon refuses one whose
+  // card changed after it was read.
+  digest?: string
 }
 
 // TalkootEvent carries `line` on talkoot_envelope, talkoot_intro,
-// talkoot_answer, and talkoot_roster, every
+// talkoot_answer, talkoot_wake, talkoot_routine, and talkoot_roster, every
 // member's status and the team `state` on talkoot_status, `card` on
 // talkoot_inbox and talkoot_inbox_resolved, and `beat` on talkoot_beat. A
 // resolved card carries no request. Beats are live only: a reconnect replays
@@ -3622,6 +3785,8 @@ export interface VerbParams {
   'talkoot.post': TalkootPostParams
   'talkoot.pause': TalkootPauseParams
   'talkoot.resume': TalkootResumeParams
+  'talkoot.wake_cancel': TalkootWakeCancelParams
+  'talkoot.routine_set': TalkootRoutineSetParams
   'talkoot.recruit': TalkootRecruitParams
   'talkoot.inbox': TalkootRef
   'talkoot.trace': TalkootTraceParams

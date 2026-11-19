@@ -29,7 +29,7 @@ type TalkootSessions interface {
 
 // frameSessionMethods act on the session the frame names in Sess.
 var frameSessionMethods = map[Method]bool{
-	MethodPrompt: true, MethodQueue: true, MethodQueueSet: true, MethodCancel: true,
+	MethodPrompt: true, MethodQueue: true, MethodQueueSet: true, MethodQueueSend: true, MethodCancel: true,
 	MethodCompact: true, MethodClear: true, MethodMessageEdit: true, MethodMessageDelete: true,
 	MethodTurnSwipe: true, MethodTurnRetry: true, MethodTurnContinue: true, MethodTurnResume: true,
 	MethodApprove: true, MethodAnswer: true,

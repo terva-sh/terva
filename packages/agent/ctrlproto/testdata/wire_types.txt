@@ -764,6 +764,10 @@ ProvidersView
 QueueParams
 	text	string
 	source	string	omitempty
+QueueSendParams
+	index	int
+	text	string	omitempty
+	all	bool	omitempty
 QueueSetParams
 	texts	[]string
 	sources	[]string	omitempty
@@ -1242,6 +1246,7 @@ TalkootDecideParams
 	decision	string
 	ops	[]TalkootOp	omitempty
 	reason	string	omitempty
+	digest	string	omitempty
 TalkootDraft
 	id	string
 	text	string
@@ -1314,6 +1319,9 @@ TalkootLine
 	attempt	int	omitempty
 	card	string	omitempty
 	outcome	string	omitempty
+	due	time.Time	omitzero
+	routine	*TalkootRoutine	omitempty
+	count	int	omitempty
 TalkootListResult
 	talkoots	[]TalkootSummary
 TalkootMark
@@ -1452,6 +1460,7 @@ TalkootProposal
 	applied	[]TalkootOp	omitempty
 	problem	string	omitempty
 	persona	*TalkootPersonaDraft	omitempty
+	routine	*TalkootRoutineAsk	omitempty
 TalkootProposalsParams
 	id	string
 	all	bool	omitempty
@@ -1503,6 +1512,59 @@ TalkootRosterMember
 	turns_per_day	int	omitempty
 	tools	[]string	omitempty
 	idle_stop	string	omitempty
+TalkootRoutine
+	id	string
+	member	string
+	kind	string
+	schedule	string
+	prompt	string	omitempty
+	command	string	omitempty
+	fields	TalkootRoutineFields
+	ends_at	time.Time	omitzero
+	status	string
+	approved_by	string	omitempty
+	approved_at	time.Time	omitzero
+	changed_by	string	omitempty
+	reason	string	omitempty
+	runs	int	omitempty
+	spent_today_usd	float64	omitempty
+	reviews_today	int	omitempty
+	run_session	string	omitempty
+	next	time.Time	omitzero
+	problem	string	omitempty
+TalkootRoutineAsk
+	kind	string
+	schedule	string
+	prompt	string	omitempty
+	command	string	omitempty
+	differs	[]TalkootRoutineDiff	omitempty
+	fields	*TalkootRoutineFields	omitempty
+	defaults_unknown	bool	omitempty
+	digest	string	omitempty
+	reviews_counted	bool	omitempty
+TalkootRoutineDiff
+	field	string
+	value	string
+	default	string	omitempty
+TalkootRoutineFields
+	end_after_runs	int
+	end_after_days	int
+	spend_usd_per_day	float64
+	reviews_per_day	int
+	follow_ups	int
+	catch_up	bool
+TalkootRoutineSetParams
+	id	string
+	by	string
+	routine	string
+	action	string
+	reason	string	omitempty
+TalkootRoutines
+	on	bool
+	max	int	omitempty
+	problem	string	omitempty
+	reviews_counted	bool	omitempty
+	routines	[]TalkootRoutine	omitempty
 TalkootSaveTemplateParams
 	id	string
 	name	string
@@ -1569,6 +1631,26 @@ TalkootView
 	members	[]TalkootMember
 	held	[]string	omitempty
 	chat	*ChatBridgeState	omitempty
+	wakes	*TalkootWakes	omitempty
+	routines	*TalkootRoutines	omitempty
+TalkootWake
+	id	string
+	member	string
+	chain	string	omitempty
+	reason	string
+	set	time.Time	omitzero
+	due	time.Time
+	routine	string	omitempty
+TalkootWakeCancelParams
+	id	string
+	by	string
+	wake	string
+TalkootWakes
+	on	bool
+	per_member	int	omitempty
+	max_delay	string	omitempty
+	problem	string	omitempty
+	open	[]TalkootWake	omitempty
 TalkootWorkerParams
 	id	string
 	member	string

@@ -51,6 +51,7 @@ var refusedCommands = []string{
 	"ResumeSession",
 	"ResumeTurn",
 	"RetryTurn",
+	"SendQueued",
 	"SetQueue",
 	"SetSessionReasoning",
 	"SideChatAsk",

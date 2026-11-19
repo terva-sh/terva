@@ -279,9 +279,13 @@ Because the sequence is fixed and carries no theme data, it is also the reliable
 
 ## Queued messages
 
-You can keep typing while the agent is working. Pressing `enter` during a turn queues the message instead of interrupting: it shows up above the status bar as `sliding in: <text>` and is delivered as the next user turn the moment the current one finishes. Queue as many as you want; they run in order. `esc` cancels the active turn and drops the queue so a runaway turn doesn't flood you with stale follow-ups; `ctrl+c` while busy arms the exit hint instead of interrupting, a second `ctrl+c` within two seconds exits terva.
+You can keep typing while the agent is working. Pressing `enter` during a turn queues the message instead of interrupting: it shows up above the status bar as `sliding in: <text>` and is delivered at the next pause between the agent's steps, or as the next user turn when the current one finishes first. Queue as many as you want; they run in order. `esc` cancels the active turn and drops the queue so a runaway turn doesn't flood you with stale follow-ups; `ctrl+c` while busy arms the exit hint instead of interrupting, a second `ctrl+c` within two seconds exits terva.
 
 To recover the most recently queued message back into the editor (to tweak it before it runs), press `Option+↑`. In VS Code's integrated terminal that chord doesn't survive xterm.js's macOS key handling, so use `Option+Shift+↑` there. terva's hint line under the sliding-in queue adapts automatically based on `$TERM_PROGRAM`.
+
+To send a queued message before the turn ends, press `Option+1`. terva stops the running turn and starts the next one on that message, and your first prompt stays in the conversation. When more than one message waits, each chip carries a number: `Option+2` sends the second, and so on to `Option+9`. `Option+0` sends them all, in order. The messages that you did not send stay queued, and terva delivers them at the next pause between steps. This suits notes: write them while the agent works, let them go in at its pauses, and send one yourself when the work needs to change direction.
+
+`/send` does the same on a terminal that does not report `Option` with a digit, such as macOS Terminal without "Use Option as Meta key": `/send` for the first message, `/send 3` for the third, and `/send all` for every one.
 
 terva queues texts of its own in the same place, such as the report on a batch of sub-agents. Such a chip names its writer, as in `sliding in: (sub-agent report) …`. `Option+↑` takes only a message that you typed, and leaves terva's text in the queue. When the text reaches the conversation, it shows under a rule that reads `from terva · sub-agent report`, and not in your own message bubble.
 

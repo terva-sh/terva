@@ -207,6 +207,11 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 			desc:  i18n.M("pop the last queued message back into the input"),
 		},
 		{
+			kind: tui.KeyRune, alt: true, name: "send-queued-now", run: i.keySendQueued,
+			label: "alt+1 … alt+9 / alt+0",
+			desc:  i18n.M("send that queued message now and stop the running turn - alt+0 sends them all (also /send)"),
+		},
+		{
 			kind: tui.KeyUp, name: "cursor-up-or-scroll", run: i.keyUp,
 			label: "up / down",
 			desc:  i18n.M("move within multi-line input - scroll chat at input edge"),
@@ -527,6 +532,19 @@ func (i *Interactive) keyPopQueued(context.Context, tui.Key) keyOutcome {
 	}
 	i.ed.SetValue(text)
 	i.inputHistoryIndex = -1
+	i.invalidate()
+	return keyHandled
+}
+
+// keySendQueued (alt+1 to alt+9, alt+0) sends a queued message now. The daemon
+// stops the running turn and starts the next one on that message. A digit
+// names a chip by its number, and zero names the whole queue. Every other
+// alt chord passes, and so does a digit when nothing is queued.
+func (i *Interactive) keySendQueued(_ context.Context, k tui.Key) keyOutcome {
+	if k.Rune < '0' || k.Rune > '9' || i.carrierQueuedCount() == 0 {
+		return keyPass
+	}
+	i.sendCarrierQueued(int(k.Rune - '0'))
 	i.invalidate()
 	return keyHandled
 }

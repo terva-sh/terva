@@ -82,6 +82,11 @@ var registry = []Spec{
 	// would destroy the reply it was asked to recover.
 	{Name: "/continue", Group: groupSession, Desc: i18n.M("ask for the reply again when a turn died without one (after a provider error)")},
 
+	// Not CancelsTurn, though it stops the turn. The daemon does the stop and
+	// the restart as one step, and a cancel from here would drop the queue
+	// that this command reads.
+	{Name: "/send", Group: groupSession, Desc: i18n.M("send a queued message now and stop the running turn (or /send all)"), Hint: "number | all (optional)"},
+
 	{Name: "/study", Group: groupContext, Desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", Hint: "file or directory (optional)"},
 	{Name: "/btw", Group: groupContext, Desc: "side-chat that doesn't add to the main thread (saves tokens)"},
 	// Beside /btw because it is the same class of thing: one model call that

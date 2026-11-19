@@ -223,6 +223,14 @@ func (s *HubService) Queue(ctx context.Context, sess string, p ctrlproto.QueuePa
 	return svc.Queue(ctx, id, p)
 }
 
+func (s *HubService) SendQueued(ctx context.Context, sess string, p ctrlproto.QueueSendParams) error {
+	svc, id, err := s.command(sess)
+	if err != nil {
+		return err
+	}
+	return svc.SendQueued(ctx, id, p)
+}
+
 func (s *HubService) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
 	svc, id, err := s.command(sess)
 	if err != nil {

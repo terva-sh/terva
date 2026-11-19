@@ -162,6 +162,11 @@ func (r *recorder) SetQueue(_ context.Context, sess string, p QueueSetParams) er
 	return nil
 }
 
+func (r *recorder) SendQueued(_ context.Context, sess string, p QueueSendParams) error {
+	r.note("SendQueued", sess, p)
+	return nil
+}
+
 func (r *recorder) Cancel(_ context.Context, sess string) error {
 	r.note("Cancel", sess, nil)
 	return nil
@@ -408,6 +413,7 @@ func mandatoryDispatchCases() []dispatchCase {
 		{MethodQueue, QueueParams{Text: "queued", Source: QueueSourceSwarmRecap}, "Queue", QueueParams{Text: "queued", Source: QueueSourceSwarmRecap}},
 		// The sources go with the texts. They say which of two equal texts
 		// the client kept.
+		{MethodQueueSend, QueueSendParams{Index: 2, Text: "c"}, "SendQueued", QueueSendParams{Index: 2, Text: "c"}},
 		{MethodQueueSet, QueueSetParams{Texts: []string{"a", "b"}, Sources: []string{"", QueueSourceSwarmRecap}}, "SetQueue", QueueSetParams{Texts: []string{"a", "b"}, Sources: []string{"", QueueSourceSwarmRecap}}},
 		{MethodCancel, nil, "Cancel", nil},
 		{MethodCompact, nil, "Compact", nil},

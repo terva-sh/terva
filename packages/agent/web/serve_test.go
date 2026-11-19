@@ -495,6 +495,9 @@ func (f *fakeWS) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams
 func (f *fakeWS) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSetParams) error {
 	return nil
 }
+func (f *fakeWS) SendQueued(ctx context.Context, sess string, p ctrlproto.QueueSendParams) error {
+	return nil
+}
 func (f *fakeWS) Cancel(ctx context.Context, sess string) error  { return nil }
 func (f *fakeWS) Compact(ctx context.Context, sess string) error { return nil }
 func (f *fakeWS) Clear(ctx context.Context, sess string) error   { return nil }

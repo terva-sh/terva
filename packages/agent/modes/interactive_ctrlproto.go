@@ -1770,6 +1770,40 @@ func (i *Interactive) popCarrierQueue() (string, bool) {
 	return text, true
 }
 
+// sendCarrierQueued asks the daemon to deliver queued entries now, ahead of
+// the running turn. n counts the chips from one, as the screen numbers them,
+// and zero names the whole queue. It reports whether the daemon took the
+// request, and the daemon's broadcast is what updates the mirror.
+//
+// The call names the text beside the index. The mirror can be one broadcast
+// behind the queue, and the daemon then refuses with no harm done.
+func (i *Interactive) sendCarrierQueued(n int) bool {
+	i.mu.Lock()
+	count := len(i.carrierQueued)
+	p := ctrlproto.QueueSendParams{All: n == 0}
+	if n >= 1 && n <= count {
+		p.Index, p.Text = n-1, i.carrierQueued[n-1]
+	}
+	i.mu.Unlock()
+	switch {
+	case count == 0:
+		i.setStatusErr(i18n.T("no message is queued"))
+		return false
+	case n < 0 || n > count:
+		i.setStatusErr(i18n.T("no queued message has the number %d", n))
+		return false
+	}
+	if err := i.cfg.Carrier.SendQueued(context.Background(), i.carrierSession(), p); err != nil {
+		i.setStatusErr(err.Error())
+		return false
+	}
+	// The daemon stops the turn for the send. A dialog that waits on that
+	// turn must close, as it does for esc, or the turn cannot end.
+	i.confirmDialog.CancelAll("turn cancelled")
+	i.questionDialog.CancelAll()
+	return true
+}
+
 // takeCarrierTailLimit hands the resolved tail cap to the render pass, once.
 // i.view belongs to the main goroutine; the pump only ever computes the value.
 func (i *Interactive) takeCarrierTailLimit() (limit int, ok bool) {

@@ -70,6 +70,7 @@ personas.list	params=-	result=PersonasListResult
 post.line	params=PostLineParams	result=-
 prompt	params=PromptParams	result=-
 queue	params=QueueParams	result=-
+queue.send	params=QueueSendParams	result=-
 queue.set	params=QueueSetParams	result=-
 replay.control	params=ReplayControlParams	result=ReplayStateResult
 replay.state	params=-	result=ReplayStateResult
@@ -129,11 +130,14 @@ talkoot.recruit	params=TalkootRecruitParams	result=SessionResult
 talkoot.ref	params=TalkootOpenRefParams	result=TalkootRefText
 talkoot.resume	params=TalkootResumeParams	result=-
 talkoot.room	params=TalkootRoomParams	result=TalkootRoomPage
+talkoot.routine_set	params=TalkootRoutineSetParams	result=TalkootRoutines
 talkoot.save_template	params=TalkootSaveTemplateParams	result=TalkootTemplate
 talkoot.templates	params=-	result=TalkootTemplatesResult
 talkoot.trace	params=TalkootTraceParams	result=TalkootTraceResult
 talkoot.update	params=TalkootUpdateParams	result=TalkootView
+talkoot.wake_cancel	params=TalkootWakeCancelParams	result=-
 talkoot.worker	params=TalkootWorkerParams	result=TaskInfo
+timers.list	params=-	result=TimersResult
 tools.display	params=-	result=ToolsDisplayResult
 turn.advance	params=-	result=-
 turn.continue	params=TurnContinueParams	result=-

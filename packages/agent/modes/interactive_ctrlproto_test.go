@@ -121,6 +121,9 @@ type fakeCarrier struct {
 	setQueues [][]string
 	// setQueueSources is the Sources list of each of those calls, by position.
 	setQueueSources [][]string
+	// sends is every queue.send the TUI made, and sendErr refuses them.
+	sends   []ctrlproto.QueueSendParams
+	sendErr error
 	// usage is the usage.snapshot fixture; usageCalls records each call's
 	// refresh flag, usageErr fails every call (all guarded by mu).
 	usage      ctrlproto.UsageInfo
@@ -179,6 +182,17 @@ func (f *fakeCarrier) Prompt(ctx context.Context, sess string, p ctrlproto.Promp
 
 func (f *fakeCarrier) Queue(ctx context.Context, sess string, p ctrlproto.QueueParams) error {
 	f.queued <- p.Text
+	return nil
+}
+
+// SendQueued records what the TUI asked the daemon to send now.
+func (f *fakeCarrier) SendQueued(ctx context.Context, sess string, p ctrlproto.QueueSendParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		return f.sendErr
+	}
+	f.sends = append(f.sends, p)
 	return nil
 }
 

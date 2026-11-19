@@ -1004,8 +1004,14 @@ func queueChipRows(theme tui.Theme, queued []queuedChip, cols int) []string {
 	}
 	rows := []string{""}
 	typed := false
-	for _, q := range queued {
-		label := theme.FG256(theme.Accent, "  sliding in: ")
+	for n, q := range queued {
+		// The number is what alt+digit and /send take. A queue of one needs
+		// none, and a chip past the ninth has no key.
+		number := ""
+		if len(queued) > 1 {
+			number = formatInt(n+1) + ". "
+		}
+		label := theme.FG256(theme.Accent, "  "+number+"sliding in: ")
 		text := q.text
 		// A text that terva queued names its writer, so that it does not
 		// read as something the person typed and forgot.
@@ -1014,7 +1020,7 @@ func queueChipRows(theme tui.Theme, queued []queuedChip, cols int) []string {
 		} else {
 			typed = true
 		}
-		rows = append(rows, label+theme.FG256(theme.Muted, truncateLine(text, cols-17)))
+		rows = append(rows, label+theme.FG256(theme.Muted, truncateLine(text, cols-17-len(number))))
 	}
 	// Hint row, rendered in the same muted tone as the model info on the
 	// status bar so it reads as ambient metadata rather than a chip. It
@@ -1025,5 +1031,8 @@ func queueChipRows(theme tui.Theme, queued []queuedChip, cols int) []string {
 		hint := "  Press " + slideBackChordHint() + " to slide back into input"
 		rows = append(rows, theme.FG256(theme.Muted, hint))
 	}
+	// The second hint names the keys that send a chip ahead of the turn.
+	send := "  Press " + sendNowChordHint(len(queued)) + " to send now"
+	rows = append(rows, theme.FG256(theme.Muted, send))
 	return rows
 }

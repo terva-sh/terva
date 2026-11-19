@@ -365,6 +365,12 @@ type Agent struct {
 	// after a text-only assistant turn finishes. It never interrupts
 	// a running tool or cancels an in-flight provider request.
 	queued []QueuedMessage
+
+	// holdQueue and queueLead carry UserMessageExtras.HoldQueue and
+	// QueueLead from promptExtra to the loop it starts. runLoop clears them
+	// as it reads them.
+	holdQueue atomic.Bool
+	queueLead atomic.Int64
 }
 
 // QueuedMessage is one entry of the agent's queue: a text, and what wrote it.
@@ -547,6 +553,55 @@ func (a *Agent) ShiftQueuedMessage() (QueuedMessage, bool) {
 	m := a.queued[0]
 	a.queued = a.queued[1:]
 	return m, true
+}
+
+// TakeQueuedMessage removes and returns the entry at index, counted from the
+// oldest. Hosts use it to send one entry ahead of the others. A non-empty text
+// is what the caller saw there: the loop drains the queue with no notice, so
+// an index alone can name another entry by the time it arrives. It reports
+// false, and takes nothing, when index is out of range or the entry holds
+// another text.
+//
+// 🔑 taken, when it is not nil, runs under the queue's lock once the entry is
+// out. A host cancels the running turn there. The loop takes the queue under
+// the same lock and takes nothing once its context is cancelled, so no
+// boundary can fall between the take and the cancel and deliver the entries
+// that stay ahead of the one that was picked. This holds for a turn that has
+// not reached its loop yet. taken must not call back into the agent.
+func (a *Agent) TakeQueuedMessage(index int, text string, taken func()) (QueuedMessage, bool) {
+	text = strings.TrimSpace(text)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if index < 0 || index >= len(a.queued) || (text != "" && a.queued[index].Text != text) {
+		return QueuedMessage{}, false
+	}
+	m := a.queued[index]
+	a.queued = append(append([]QueuedMessage(nil), a.queued[:index]...), a.queued[index+1:]...)
+	if taken != nil {
+		taken()
+	}
+	return m, true
+}
+
+// takeQueuedForLoop is the loop's drain at a safe boundary. It takes the whole
+// queue, or the first limit entries when limit is not negative. It takes
+// nothing once ctx is cancelled: a turn that was stopped answers no message,
+// so a text it took would wait in the transcript with no reply. The context
+// is read under the lock, which is what TakeQueuedMessage relies on.
+func (a *Agent) takeQueuedForLoop(ctx context.Context, limit int) []QueuedMessage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ctx.Err() != nil || len(a.queued) == 0 {
+		return nil
+	}
+	n := len(a.queued)
+	if limit >= 0 && limit < n {
+		n = limit
+	}
+	out := make([]QueuedMessage, n)
+	copy(out, a.queued)
+	a.queued = append([]QueuedMessage(nil), a.queued[n:]...)
+	return out
 }
 
 // PendingQueuedMessages returns a snapshot of user messages waiting
@@ -1313,6 +1368,18 @@ func (a *Agent) acquire() (release func(), ok bool) {
 type UserMessageExtras struct {
 	Preamble string
 	Meta     map[string]string
+	// HoldQueue makes the loop leave the queue alone at the first safe
+	// boundary of this prompt, which comes before its first model call. A
+	// host sets it when it starts a turn on one queued entry that a person
+	// picked to go ahead of the others. Without it that first boundary takes
+	// every entry that still waits, so the pick would deliver them all. The
+	// held entries go at the next boundary, as usual.
+	HoldQueue bool
+	// QueueLead is how many entries from the front of the queue the first
+	// boundary still takes under HoldQueue. A host that starts a turn on the
+	// first of several picked entries puts the others at the front and counts
+	// them here. It has no effect without HoldQueue.
+	QueueLead int
 }
 
 // withMeta returns m with key set, without writing into the caller's map. The
@@ -1397,6 +1464,9 @@ func (a *Agent) promptExtra(ctx context.Context, text string, images []provider.
 	a.fireMessageAppended(user)
 	sink(EvUserMessage{Message: user, Source: user.Meta[MetaSource]})
 
+	// The single flight is held, so no other loop can read this prompt's hold.
+	a.holdQueue.Store(extras.HoldQueue)
+	a.queueLead.Store(int64(extras.QueueLead))
 	err := a.runLoop(ctx, sink)
 
 	// A PERSON stopped the turn and nothing at all was recorded after the
@@ -1800,6 +1870,11 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 	// batch. A request that lands after the clear is honoured as usual.
 	a.repinRequested.Store(false)
 
+	// Taken once, so it holds the first boundary of the prompt that set it
+	// and no boundary after that. See UserMessageExtras.HoldQueue.
+	holdQueue := a.holdQueue.Swap(false)
+	queueLead := int(a.queueLead.Swap(0))
+
 	// One pin per segment; the whole Prompt is a single segment until a
 	// boundary refreshes it (repinForContinuation) — see pinTurn.
 	pin := a.pinTurn()
@@ -1836,7 +1911,11 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		// any previous tool batch has already completed and its
 		// results have been appended, but no new provider request has
 		// started yet.
-		if pending := a.drainQueuedMessages(); len(pending) > 0 {
+		limit := -1
+		if holdQueue {
+			holdQueue, limit = false, queueLead
+		}
+		if pending := a.takeQueuedForLoop(ctx, limit); len(pending) > 0 {
 			a.appendQueuedAsUser(pending, false, sink)
 			// The queue just shrank, and no host asked it to — this is the
 			// only mutation the host does not perform itself, so it is the

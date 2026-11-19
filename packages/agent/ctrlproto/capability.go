@@ -63,6 +63,7 @@ var readOnlyMethods = map[Method]bool{
 	MethodSurfacesList: true, MethodSurfaceGet: true,
 	MethodFilesList:     true,
 	MethodWorkflowsList: true, MethodWorkflowsGet: true,
+	MethodTimersList:         true,
 	MethodConversationReveal: true, MethodConversationHistory: true,
 	MethodSharedList: true, MethodSharedFetch: true,
 	MethodAuthProviders: true,
@@ -109,6 +110,8 @@ var spendingMethods = map[Method]bool{
 	// it reaches the provider exactly as turn.retry does.
 	MethodTurnResume: true,
 	MethodPrompt:     true, MethodQueue: true, MethodCompact: true,
+	// queue.send starts a turn on an entry that waited, as a prompt does.
+	MethodQueueSend: true,
 	MethodTurnSwipe: true, MethodTurnRetry: true, MethodTurnContinue: true,
 	MethodApprove: true, MethodAnswer: true,
 	MethodPostLine: true, MethodDirectTurn: true, MethodTurnAdvance: true,
@@ -129,6 +132,9 @@ var spendingMethods = map[Method]bool{
 	// the card and the roster line show that name. Only a caller that could
 	// make the change itself with talkoot.update may claim a person's name.
 	MethodTalkootPropose: true,
+	// A resume gives a routine its timer back, and a routine's run spends.
+	// A pause and a delete ride the same verb.
+	MethodTalkootRoutineSet: true,
 }
 
 // Capabilities reports what m does.
@@ -228,6 +234,8 @@ var writeOnlyMethods = map[Method]bool{
 	MethodTalkootManager: true,
 	// A discard removes a draft file and wakes no one.
 	MethodTalkootDiscard: true,
+	// A cancel removes a turn that a member planned. It starts none.
+	MethodTalkootWakeCancel: true,
 }
 
 // steerMethods change or wake a talkoot. Membership adds [CapSteer] to the
@@ -246,6 +254,10 @@ var steerMethods = map[Method]bool{
 	// only a caller that may create a team itself may decide.
 	MethodTalkootDiscard: true,
 	MethodTalkootKickoff: true,
+	// A cancel decides that a member does not get a turn it planned.
+	MethodTalkootWakeCancel: true,
+	// A pause, a resume and a delete decide whether a routine runs.
+	MethodTalkootRoutineSet: true,
 	// 🔑 A user template shadows a built-in or extension template of the same
 	// name in every workspace on this home. So a save decides what a familiar
 	// name such as coding creates next, which only a caller that may create a

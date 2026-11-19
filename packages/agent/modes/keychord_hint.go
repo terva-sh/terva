@@ -37,3 +37,20 @@ func slideBackChordHint() string {
 	}
 	return "Option+↑"
 }
+
+// sendNowChordHint returns the chords that send a queued message ahead of the
+// running turn, for a queue of n chips. One chip needs one chord. More chips
+// have a chord each, by number, and zero sends them all.
+//
+// The modifier has the name that slideBackChordHint gives it, so the two
+// hint rows read alike. A terminal that does not report it has /send.
+func sendNowChordHint(n int) string {
+	if n <= 1 {
+		return "Option+1"
+	}
+	last := n
+	if last > 9 {
+		last = 9
+	}
+	return "Option+1…" + string(rune('0'+last)) + " (Option+0 for all)"
+}

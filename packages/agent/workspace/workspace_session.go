@@ -43,11 +43,19 @@ const webReloadGrace = 2 * time.Second
 // stream out to every connected client. Pending tool-approval and question
 // round-trips park here until a client answers (see workspace_confirm.go).
 type wsSession struct {
-	id    string
-	ws    *Workspace
-	agent *core.Agent
-	sess  *session.Session
-	gate  *permission.ConfirmGate // nil in pure-yolo (no confirmation needed)
+	id string
+	ws *Workspace
+	// run is set for the session of a routine's run, and nil for every
+	// other session. The session's events tell the run what its turn costs.
+	run atomic.Pointer[routineRun]
+	// unanswered is set when a question of the turn at work had no answer
+	// at its deadline, and that ended the member's chain. The turn's next
+	// tool call stops it (workspace_talkoot_unanswered.go). A turn's start
+	// clears it.
+	unanswered atomic.Bool
+	agent      *core.Agent
+	sess       *session.Session
+	gate       *permission.ConfirmGate // nil in pure-yolo (no confirmation needed)
 	// policyNotice holds the permission-policy warnings not yet shown to a
 	// client, such as a project config that could not be parsed and so lost
 	// its deny rules. Guarded by mu. See setPolicyWarnings.
@@ -115,7 +123,18 @@ type wsSession struct {
 	// applyReasoning re-levels only the sessions that never chose for
 	// themselves, the same way models.set_default leaves a switched session on
 	// the model it was switched to.
-	reasoning  string
+	reasoning string
+	// sent holds the queued entries that a queue.send took for the next turn,
+	// until the running turn or compaction ends. sentHold says that the new
+	// turn leaves the rest of the queue for a later boundary. Both are
+	// guarded by mu. See sendQueued.
+	sent     []core.QueuedMessage
+	sentHold bool
+	// stoppedAfterSend says that a person interrupted the running turn after
+	// a queue.send had cancelled it. The turn's cause cannot say so. endTurn
+	// clears it. Guarded by mu. See interruptTurn.
+	stoppedAfterSend bool
+
 	turnCtx    context.Context
 	turnCancel context.CancelCauseFunc                    // non-nil while a turn runs; the cause says who stopped it
 	compacting bool                                       // true while compact() holds the agent; the session's SECOND busy state (see compact)
@@ -447,7 +466,7 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// state exists to collide when a host_tool_call approval parks concurrently
 	// with a model call's.
 	hookEng := w.hookEng
-	ag := r.NewAgent(build.BuildToolGate(hookEng, gate, extMgr), build.ExtensionFilters(w.ctx, extMgr)...)
+	ag := r.NewAgent(build.BuildToolGate(hookEng, gate, extMgr, s.rungs()...), build.ExtensionFilters(w.ctx, extMgr)...)
 	s.agent = ag
 	s.gate = gate
 	// The tool-refresh seam: a tool that changes what registration itself can
@@ -601,13 +620,52 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// A talkoot member's sidebar names the tool its turn runs. Only tool and
 	// turn events reach the workspace, so a text delta costs one type switch.
 	ag.AddEventObserver(func(ev core.AgentEvent) {
+		// 🚨 A routine's run stops at its next step after its cost passed
+		// what its routine may still spend today (routineRun.step). The
+		// turn is cancelled here, on its own event path, so the cancel is
+		// in place before the step goes on: no request goes to the model
+		// after it. A tool that the model already asked for may still
+		// start, with a context that is cancelled.
+		//
+		// 🚨 The step of a request is EvTurnStart, which the loop sends
+		// before it makes the request. EvAssistantStart comes after the
+		// request is on the wire, so a stop there cut a request that the
+		// provider had already begun to count.
+		rr := s.run.Load()
+		runStep := func() {
+			if rr != nil && rr.step() {
+				s.cancelTurn()
+			}
+		}
 		switch e := ev.(type) {
 		case core.EvToolCall:
+			runStep()
+			// 🚨 A run that asked a person and got no answer was told to
+			// call no tool. One that calls a tool is stopped here.
+			if rr != nil && rr.askedAgain() {
+				s.cancelTurn()
+			}
+			// 🚨 A member's turn gets the same stop. The pause of its chain
+			// refuses a send to a teammate, and it refuses nothing that the
+			// member does on its own: a command, an edit, or the question
+			// asked again. One call passes, the word to the person, and the
+			// router lets that send go to the person alone.
+			if s.unanswered.Load() && e.Name != leftWordTool {
+				s.cancelTurn()
+			}
 			s.ws.talkootActivity(s.id, e.ID, e.Name)
 		case core.EvToolResult:
 			s.ws.talkootActivity(s.id, e.ID, "")
 		case core.EvTurnEnd, core.EvDone:
 			s.ws.talkootActivity(s.id, "", "")
+		case core.EvTurnStart, core.EvRetry:
+			// A retry is a request too. The loop sends EvRetry before it
+			// waits and tries again, and a failed request can report a cost.
+			runStep()
+		case core.EvUsage:
+			if rr != nil {
+				rr.cost(e.Cumulative.CostUSD, time.Now())
+			}
 		}
 	})
 	// A talkoot member's failed tool calls and retries become room lines.
@@ -882,9 +940,52 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 	// footprint (decision 0009). Like the chat tools, the seat is a declarative
 	// input: seating and unseating re-run this derivation.
 	if s != nil {
-		if seat, ok := w.talkootSeatOf(s.id); ok {
+		if seat, ok := w.talkootSeatOf(s.id); ok && seat.b.routine != nil {
+			// 🚨 A routine's run reads the roster and the notes, and it speaks
+			// to nobody. It gets no tool that sends, hands off, proposes or
+			// moves its workspace.
+			//
+			// It keeps ask_user_question. Nobody may be there to answer, so
+			// the question has a deadline, and the run ends at a question
+			// that nobody answered (workspace_talkoot_unanswered.go).
+			//
+			// It gets talkoot_wake only while its routine's card still
+			// allows a follow-up, and while the person's configuration turns
+			// wakes on (decision 0029 rule 11). The seat reads the policy
+			// again at each call, and the router holds the allowance.
+			var waker tools.TalkootWaker
+			if rr := seat.b.routine.run; rr.Follow < rr.FollowUps && config.TalkootWakes().On {
+				waker = seat
+			}
+			for _, t := range tools.TalkootRunTools(seat, waker) {
+				r.ToolRegistry[t.Name()] = t
+			}
+			if tc := tools.TicketCoreFor(r.ToolRegistry); tc != nil {
+				id := s.id
+				tc.Member = func() (tools.TicketMember, bool) { return w.sessionTicketMember(id) }
+			}
+		} else if ok {
 			for _, t := range tools.TalkootTools(seat) {
 				r.ToolRegistry[t.Name()] = t
+			}
+			// talkoot_wake: only while the person's configuration turns wakes
+			// on. The seat reads the policy again at each call, so a session
+			// that still holds the tool after the person turned wakes off
+			// sets none.
+			//
+			// ⚠️ The timer service is not asked here. A daemon starts its
+			// talkoots before its timers, and a delivery that waited for the
+			// restart builds its member's session in between. That session
+			// would never get the tool. The seat refuses while the daemon
+			// keeps no timers, and says so.
+			if config.TalkootWakes().On {
+				r.ToolRegistry["talkoot_wake"] = &tools.TalkootWakeTool{Seat: seat}
+			}
+			// talkoot_routine: only while the person's configuration turns
+			// routines on, for the same reasons. The seat reads the policy
+			// again at each call.
+			if config.TalkootRoutines().On {
+				r.ToolRegistry["talkoot_routine"] = &tools.TalkootRoutineTool{Seat: seat}
 			}
 			// talkoot_workspace: only a member with workspace: either moves.
 			if _, _, err := w.movableSeat(s.id); err == nil {
@@ -1102,12 +1203,14 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		if endTalkoot != nil {
 			costBefore = s.agent.Cost().CostUSD
 		}
-		// 🚨 A seat alone does not make a turn Talkoot work. A person can type
-		// into a member's session directly, and that answer is private. Only a
-		// turn that a delivery started may publish its final reply to the room.
-		// A private turn that drains a delivery partway stays private.
+		// Only a turn that one delivery started publishes its final reply to
+		// the room (talkootTurn). These counts tell such a turn from one that a
+		// person typed.
 		openedBefore := s.reads.opened.Load()
 		usersBefore := s.reads.users.Load()
+		s.reads.turnTaken.Store(s.reads.taken.Load())
+		s.reads.turnUsers.Store(usersBefore)
+		s.unanswered.Store(false)
 		s.reads.fresh.Store(true)
 		// 🚨 A successful turn can append no assistant message. The transcript's
 		// last reply then belongs to an earlier turn, and the member's chain may
@@ -1117,7 +1220,8 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		if closing {
 			// The talkoots have closed, and no report of this member turn
 			// could reach them. The daemon is going down, so the turn does
-			// not run.
+			// not run. The session of a routine's run gets the same answer
+			// when its run is over (talkootTurn).
 			err = context.Canceled
 		} else {
 			err = gen(turnCtx)
@@ -1152,12 +1256,15 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// Publish before endTurn frees the session for another prompt or a
 		// compaction changes its transcript. Failed and cancelled generations
 		// must never expose a partial reply to the room.
-		if publishTalkoot != nil && err == nil && turnCtx.Err() == nil &&
-			s.reads.opened.Load() != openedBefore && s.reads.users.Load()-usersBefore == 1 &&
-			s.reads.replies.Load() != repliesBefore {
-			publishTalkoot(finalTalkootText(s.agent.Messages()))
+		if publishTalkoot != nil && err == nil && turnCtx.Err() == nil && s.reads.replies.Load() != repliesBefore {
+			delivered := s.reads.opened.Load() != openedBefore && s.reads.users.Load()-usersBefore == 1
+			publishTalkoot(finalTalkootText(s.agent.Messages()), delivered)
 		}
-		next, restart := s.endTurn(turnCtx, err)
+		// Read before endTurn clears it. See interruptTurn.
+		s.mu.Lock()
+		stopped := s.stoppedAfterSend
+		s.mu.Unlock()
+		next, restart, start := s.endTurn(turnCtx, err)
 		// Snapshot-on-done: the transcript now contains the sealed final step,
 		// so re-broadcast the authoritative snapshot the way compact/clear do.
 		// This converges any subscriber that attached mid-step — its initial
@@ -1218,11 +1325,11 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			// daemon going down cancels with another cause. A turn that
 			// returned no error finished, so an interrupt that came after
 			// it does not count.
-			interrupted := err != nil && errors.Is(context.Cause(turnCtx), core.ErrUserInterrupted)
-			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why, interrupted)
+			interrupted := err != nil && (stopped || errors.Is(context.Cause(turnCtx), core.ErrUserInterrupted))
+			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why, interrupted, err != nil && turnCtx.Err() != nil)
 		}
 		if restart {
-			if perr := s.promptQueued(next); perr != nil {
+			if perr := s.promptQueuedHold(next, start); perr != nil {
 				// Raced a client Prompt that claimed the slot between endTurn
 				// and here: re-arm at the front so the new turn's first safe
 				// boundary delivers it instead of losing it.
@@ -1436,7 +1543,12 @@ func (s *wsSession) memIndex(disk int) (int, bool) {
 // web client had too). Holding s.mu across the release AND the shift means a
 // concurrent queue() lands either before the shift (delivered by the restart)
 // or after the release (sees idle and starts its own turn) — never in between.
-func (s *wsSession) endTurn(turnCtx context.Context, err error) (next core.QueuedMessage, restart bool) {
+//
+// A queue.send comes first. The entries it holds start the next turn whatever
+// way this one ended, and the rest of the queue stays: the cancel was the
+// send's own, and the person who sent one note did not drop the others. hold
+// is true when the new turn must not take those others at its first boundary.
+func (s *wsSession) endTurn(turnCtx context.Context, err error) (next core.QueuedMessage, restart bool, start sentStart) {
 	// ErrBusy is NOT a failed turn — it is a turn that never started, because
 	// something else held the agent. Counting it as failure drained the whole
 	// pending queue: every follow-up the user had lined up, discarded because a
@@ -1447,9 +1559,13 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next core.Queue
 	storageFailed := s.agent.PersistenceError() != nil
 	s.mu.Lock()
 	s.turnCtx, s.turnCancel = nil, nil
+	s.stoppedAfterSend = false
 	var dropped []core.QueuedMessage
 	if storageFailed {
 		// Keep unsent input available for recovery. This handle cannot run it.
+		s.restoreSentHeld()
+	} else if next, start, restart = s.takeSentHeld(); restart {
+		// A send's entries start the next turn, and the queue keeps the rest.
 	} else if failed {
 		// 🔑 A talkoot delivery stays queued for the member's next turn. Its
 		// sender cannot see a drop, and the room records it delivered. It
@@ -1474,7 +1590,7 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next core.Queue
 	if restart || len(dropped) > 0 {
 		s.broadcastQueue()
 	}
-	return next, restart
+	return next, restart, start
 }
 
 // ephemeralTail names the live cards this session stacks on top of the model's
@@ -2574,7 +2690,14 @@ func (s *wsSession) queueFrom(source, text string) {
 // source goes into the prompt's metadata, so the message reads the same as
 // one that the loop took from the queue in the middle of a turn.
 func (s *wsSession) promptQueued(m core.QueuedMessage) error {
-	return s.prompt(m.Text, nil, core.UserMessageExtras{Meta: m.Meta()})
+	return s.promptQueuedHold(m, sentStart{})
+}
+
+// promptQueuedHold is promptQueued for an entry that a queue.send picked.
+// start says what the turn's first boundary takes from the queue
+// (core.UserMessageExtras.HoldQueue).
+func (s *wsSession) promptQueuedHold(m core.QueuedMessage, start sentStart) error {
+	return s.prompt(m.Text, nil, core.UserMessageExtras{Meta: m.Meta(), HoldQueue: start.hold, QueueLead: start.lead})
 }
 
 // endCompacting releases the compacting flag and settles the queue that built
@@ -2595,13 +2718,17 @@ func (s *wsSession) promptQueued(m core.QueuedMessage) error {
 func (s *wsSession) endCompacting() {
 	s.mu.Lock()
 	s.compacting = false
-	next, restart := s.agent.ShiftQueuedMessage()
+	// A queue.send that arrived during the compaction goes first.
+	next, start, restart := s.takeSentHeld()
+	if !restart {
+		next, restart = s.agent.ShiftQueuedMessage()
+	}
 	s.mu.Unlock()
 	if !restart {
 		return
 	}
 	s.broadcastQueue()
-	if err := s.promptQueued(next); err != nil {
+	if err := s.promptQueuedHold(next, start); err != nil {
 		// Something claimed the slot between the release and here. Re-arm at
 		// the front so that turn's first safe boundary delivers it, exactly as
 		// the endTurn restart path does.
@@ -2671,7 +2798,33 @@ func (s *wsSession) cancelTurn() { s.cancelTurnCause(nil) }
 
 // interruptTurn stops the active turn because a PERSON asked — Esc, /stop, a
 // client's cancel verb, the chat bridge's stop command.
-func (s *wsSession) interruptTurn() { s.cancelTurnCause(core.ErrUserInterrupted) }
+//
+// An interrupt also gives up a queue.send that waits for this turn to end. The
+// person pressed stop after the send, and a stop that started a turn would
+// not be one.
+//
+// ⚠️ The send has already cancelled that turn, and a context keeps the cause
+// of its first cancel. So the turn's cause stays the send's, and core does
+// not withdraw its prompt: the person chose to add to this conversation
+// before the stop. stoppedAfterSend carries the stop to the one other reader
+// of the cause, which is the report to a talkoot.
+func (s *wsSession) interruptTurn() {
+	s.mu.Lock()
+	c := s.turnCancel
+	dropped := c != nil && len(s.sent) > 0
+	if dropped {
+		// One hold with the cancel, so no later send can come between them.
+		s.restoreSentHeld()
+		s.stoppedAfterSend = true
+	}
+	s.mu.Unlock()
+	if dropped {
+		s.broadcastQueue()
+	}
+	if c != nil {
+		c(core.ErrUserInterrupted)
+	}
+}
 
 func (s *wsSession) cancelTurnCause(cause error) {
 	s.mu.Lock()

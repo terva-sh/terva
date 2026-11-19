@@ -40,6 +40,10 @@ func (s *Service) SetQueue(ctx context.Context, sess string, p ctrlproto.QueueSe
 	return s.c.Call(ctx, sess, ctrlproto.MethodQueueSet, p, nil)
 }
 
+func (s *Service) SendQueued(ctx context.Context, sess string, p ctrlproto.QueueSendParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodQueueSend, p, nil)
+}
+
 func (s *Service) Cancel(ctx context.Context, sess string) error {
 	return s.c.Call(ctx, sess, ctrlproto.MethodCancel, nil, nil)
 }
@@ -351,6 +355,16 @@ func (s *Service) PauseTalkoot(ctx context.Context, p ctrlproto.TalkootPausePara
 
 func (s *Service) ResumeTalkoot(ctx context.Context, p ctrlproto.TalkootResumeParams) error {
 	return s.c.Call(ctx, "", ctrlproto.MethodTalkootResume, p, nil)
+}
+
+func (s *Service) CancelTalkootWake(ctx context.Context, p ctrlproto.TalkootWakeCancelParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodTalkootWakeCancel, p, nil)
+}
+
+func (s *Service) SetTalkootRoutine(ctx context.Context, p ctrlproto.TalkootRoutineSetParams) (ctrlproto.TalkootRoutines, error) {
+	var out ctrlproto.TalkootRoutines
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootRoutineSet, p, &out)
+	return out, err
 }
 
 var _ ctrlproto.SharedFilesController = (*Service)(nil)

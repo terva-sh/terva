@@ -15,6 +15,7 @@ package modes
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"terva.sh/terva/packages/agent/config"
@@ -59,6 +60,7 @@ type slashSpec struct {
 // handler or a handler without a spec.
 var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts []string, raw string) (done bool){
 	"/help": (*Interactive).slashHelp,
+	"/send": (*Interactive).slashSend,
 
 	"/new": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.startNewSession()
@@ -404,6 +406,27 @@ func (i *Interactive) slashRestart(_ context.Context, _ []string, _ string) bool
 		return false
 	}
 	i.setStatusOK(i18n.T("restarting…"))
+	return false
+}
+
+// slashSend (/send) sends a queued message now, as alt+digit does: the first
+// one with no argument, the one with a number, or all of them.
+func (i *Interactive) slashSend(_ context.Context, parts []string, _ string) bool {
+	n := 1
+	if len(parts) >= 2 {
+		arg := strings.ToLower(parts[1])
+		if arg == "all" {
+			n = 0
+		} else if v, err := strconv.Atoi(arg); err == nil && v >= 1 {
+			n = v
+		} else {
+			i.setStatusErr(i18n.T("usage: /send [number | all]"))
+			i.invalidate()
+			return false
+		}
+	}
+	i.sendCarrierQueued(n)
+	i.invalidate()
 	return false
 }
 

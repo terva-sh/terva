@@ -6,13 +6,17 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/tui"
 )
 
 func newQueueTestInteractive() (*Interactive, *fakeCarrier) {
 	fc := newFakeCarrier()
-	i := &Interactive{dirty: make(chan struct{}, 1), turns: newTurnEngine()}
+	i := &Interactive{
+		dirty: make(chan struct{}, 1), turns: newTurnEngine(),
+		confirmDialog: dialogs.NewConfirmDialog(), questionDialog: dialogs.NewQuestionDialog(),
+	}
 	i.cfg.Carrier = fc
 	i.cfg.CarrierSession = "s1"
 	return i, fc
@@ -211,4 +215,114 @@ func typedQueue(texts ...string) []core.QueuedMessage {
 		out[i] = core.QueuedMessage{Text: t}
 	}
 	return out
+}
+
+func (f *fakeCarrier) sendsMade() []ctrlproto.QueueSendParams {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]ctrlproto.QueueSendParams(nil), f.sends...)
+}
+
+// alt+digit sends the chip with that number, and names its text so that the
+// daemon can refuse a queue that moved. alt+0 sends them all.
+func TestAltDigitSendsAQueuedMessageNow(t *testing.T) {
+	i, fc := newQueueTestInteractive()
+	i.keymap = i.buildGlobalKeymap()
+	i.handleCarrierEvent(ctrlproto.QueueUpdatedEvent(typedQueue("a", "b", "c")))
+
+	press := func(r rune) bool {
+		handled, _ := i.dispatchGlobalKey(t.Context(), tui.Key{Kind: tui.KeyRune, Rune: r, Alt: true})
+		return handled
+	}
+	if !press('2') || !press('0') {
+		t.Fatal("the keymap passed a send chord while messages waited")
+	}
+	want := []ctrlproto.QueueSendParams{{Index: 1, Text: "b"}, {All: true}}
+	if got := fc.sendsMade(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sends = %+v, want %+v", got, want)
+	}
+
+	// A number past the queue is consumed, says so, and sends nothing.
+	if !press('7') {
+		t.Fatal("the keymap passed a digit past the queue")
+	}
+	if got := fc.sendsMade(); len(got) != 2 {
+		t.Fatalf("a digit past the queue sent %+v", got[2:])
+	}
+	if i.statusErr == "" {
+		t.Fatal("a digit past the queue said nothing")
+	}
+
+	// Another alt chord is not this binding's key.
+	if press('x') {
+		t.Fatal("the send binding took alt+x")
+	}
+}
+
+// With nothing queued the chord is not a send, and the key goes on to the
+// editor as it did before the binding existed.
+func TestAltDigitPassesWithAnEmptyQueue(t *testing.T) {
+	i, fc := newQueueTestInteractive()
+	i.keymap = i.buildGlobalKeymap()
+	if handled, _ := i.dispatchGlobalKey(t.Context(), tui.Key{Kind: tui.KeyRune, Rune: '1', Alt: true}); handled {
+		t.Fatal("the send binding took alt+1 with an empty queue")
+	}
+	if got := fc.sendsMade(); len(got) != 0 {
+		t.Fatalf("an empty queue sent %+v", got)
+	}
+}
+
+// /send takes the first chip with no argument, a chip by number, or all.
+func TestSlashSendPicksTheEntry(t *testing.T) {
+	i, fc := newQueueTestInteractive()
+	i.handleCarrierEvent(ctrlproto.QueueUpdatedEvent(typedQueue("a", "b", "c")))
+
+	for _, line := range []string{"/send", "/send 3", "/send all"} {
+		i.slashSend(t.Context(), strings.Fields(line), line)
+	}
+	want := []ctrlproto.QueueSendParams{{Index: 0, Text: "a"}, {Index: 2, Text: "c"}, {All: true}}
+	if got := fc.sendsMade(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sends = %+v, want %+v", got, want)
+	}
+
+	for _, line := range []string{"/send nope", "/send 0", "/send 9"} {
+		i.statusErr = ""
+		i.slashSend(t.Context(), strings.Fields(line), line)
+		if i.statusErr == "" {
+			t.Errorf("%q said nothing", line)
+		}
+	}
+	if got := fc.sendsMade(); len(got) != 3 {
+		t.Fatalf("a refused /send sent %+v", got[3:])
+	}
+}
+
+// The chips carry the numbers that the keys take, and a queue of one has
+// nothing to tell apart.
+func TestQueueChipsAreNumberedWhenThereAreSeveral(t *testing.T) {
+	two := stripANSI(queueChipRows(tui.Dark, []queuedChip{{text: "first"}, {text: "second"}}, 100))
+	for _, want := range []string{"1. sliding in: first", "2. sliding in: second", "Option+1…2 (Option+0 for all) to send now"} {
+		if !strings.Contains(two, want) {
+			t.Errorf("no %q in:\n%s", want, two)
+		}
+	}
+	one := stripANSI(queueChipRows(tui.Dark, []queuedChip{{text: "only"}}, 100))
+	if strings.Contains(one, "1. ") || !strings.Contains(one, "Option+1 to send now") {
+		t.Errorf("a queue of one drew:\n%s", one)
+	}
+}
+
+// The daemon refuses a send when the queue moved under the mirror. The TUI
+// then shows the daemon's reason, and reports that nothing went.
+func TestARefusedSendShowsTheDaemonsReason(t *testing.T) {
+	i, fc := newQueueTestInteractive()
+	i.handleCarrierEvent(ctrlproto.QueueUpdatedEvent(typedQueue("a")))
+	fc.sendErr = ctrlproto.Errorf(ctrlproto.CodeConflict, "the queue changed")
+
+	if i.sendCarrierQueued(1) {
+		t.Fatal("a refused send reported success")
+	}
+	if !strings.Contains(i.statusErr, "the queue changed") {
+		t.Fatalf("status = %q, want the daemon's reason", i.statusErr)
+	}
 }

@@ -106,7 +106,7 @@ func TestPersistenceFailureKeepsQueuedInput(t *testing.T) {
 	s.agent.QueueMessage("first unsent message")
 	s.agent.QueueMessage("second unsent message")
 	s.agent.RecordPersistenceError(errors.New("synthetic storage failure"))
-	if _, restart := s.endTurn(ctx, s.agent.PersistenceError()); restart {
+	if _, restart, _ := s.endTurn(ctx, s.agent.PersistenceError()); restart {
 		t.Fatal("failed persistence restarted the queued turn")
 	}
 	if s.agent.QueuedMessageCount() != 2 {

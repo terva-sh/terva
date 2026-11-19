@@ -58,6 +58,17 @@ type WorkspaceService interface {
 	// stays with that text. See [QueueSetParams].
 	SetQueue(ctx context.Context, sess string, p QueueSetParams) error
 
+	// SendQueued delivers entries of sess's pending queue now. It stops the
+	// active turn and starts the next one on the entries that p names: one of
+	// them, or all. The first prompt of the stopped turn stays in the
+	// transcript, and the entries that p leaves stay queued. With no active
+	// turn it starts one at once, and it waits for a running compaction.
+	//
+	// Returns [CodeConflict] when the queue does not hold the entry that p
+	// names at that position. Sending all of an empty queue is an accepted
+	// no-op.
+	SendQueued(ctx context.Context, sess string, p QueueSendParams) error
+
 	// Cancel interrupts the active turn on sess, if any. A no-op when idle.
 	Cancel(ctx context.Context, sess string) error
 
