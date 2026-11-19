@@ -11,6 +11,17 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.141.7](https://github.com/terva-sh/terva/releases/tag/v0.141.7) — 2026-11-03
+
+### Fixes
+
+- web: take markdown-it 14.3.3 for two denial-of-service advisories
+- build with Go 1.27.3 and update dependencies
+
+### Other
+
+- secrets: build the field format on terva.sh/seal
+
 ## [v0.141.5](https://github.com/terva-sh/terva/releases/tag/v0.141.5) — 2026-10-17
 
 ### Features

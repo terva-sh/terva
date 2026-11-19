@@ -258,8 +258,11 @@ start by itself. A team's chat bridge sets one timer for its brief and one
 for the end of quiet hours
 ([talkoot.md](talkoot.md#when-the-team-writes-to-you)). A team member sets a
 one-time timer for each wake, which is one later turn for itself
-([talkoot.md](talkoot.md#let-a-member-check-back-later)). Decision record
-0029, "Unattended wakes", describes the plan the two belong to.
+([talkoot.md](talkoot.md#let-a-member-check-back-later)). A routine that you
+approved holds one recurring timer
+([talkoot.md](talkoot.md#approve-work-on-a-schedule)), and each of its times
+starts a run in a session of its own. Decision record 0029, "Unattended wakes",
+describes the plan the three belong to.
 
 Use the recipe on this page for a job of your own. A system timer starts a
 fresh process with nothing left over from the last run. A daemon timer fires
@@ -290,6 +293,12 @@ waits and says so. It does not fire at that hour in some other zone.
 
 Two daemons in one directory do not share the timers. The first one holds
 them, and the second one fires nothing and says why.
+
+The service has bounds. A recurring timer has an interval of at least one
+minute, and a schedule of times of day holds at most 48 times. A daemon
+holds at most 1,024 timers, and one timer carries at most 16 KiB of data
+for its owner. A request past a bound is refused, and the owner tells the
+agent or the person that asked.
 
 To see what a daemon will do by itself, open the **Timers** pane in the web
 app. It appears once the daemon holds a timer, and it lists each one with its

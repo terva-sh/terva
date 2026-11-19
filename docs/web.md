@@ -816,7 +816,11 @@ drawer that **☰** opens.
   member also names the tool it runs, as in "running grep". A count shows the
   messages a member sent you since you last opened its thread. The
   coordinator is pinned. The foot of the rail shows today's spend, the team
-  daily limit, **Pause the team**, and the **Marks** picker.
+  daily limit, **Pause the team**, and the **Marks** picker. It also shows
+  the state of work with no person present, each only while its key is set:
+  the chat bridge with what it holds for you, the open wakes with a cancel
+  button, and the routines with **Pause**, **Resume** and **Delete**
+  ([talkoot.md](talkoot.md#reach-the-team-from-chat) covers the three).
 - **Marks.** Each member has a mark, a small shape in its own colour. It
   appears in the rail, beside the member's messages, and on its cards. A
   member without one takes its persona's mark or accent colour, and two
@@ -843,13 +847,18 @@ drawer that **☰** opens.
   your exchanges with it, and another person's exchanges show in the room.
   Until you set a name, a member's thread shows its exchanges with every
   person.
-- **Cards.** Questions, tool approvals, roster proposals, and a new team's
-  kickoff sit in the conversation at the time they opened. A member's thread
+- **Cards.** Questions, tool approvals, roster proposals, requests for a
+  routine, and a new team's kickoff sit in the conversation at the time they
+  opened. A member's thread
   shows that member's cards. A strip above the composer counts the cards
   that wait, and **Show the oldest** scrolls to the one that has waited
   longest. An answer to a question or an approval also resolves the card in
   the member's own session. A question card says that the room keeps your
   answer, and that a teammate may see it.
+- **Routine cards.** A member's request for a routine shows the kind, the
+  schedule, the prompt or the command as the member wrote it, and each limit
+  that differs from the default of its kind. It takes **Approve** or
+  **Decline** ([talkoot.md](talkoot.md#read-the-card)).
 - **Proposal cards.** A roster proposal lists each member it touches, field by
   field, before and after. It marks each authority field, and it flags each
   one that grants more. A member that joins shows in full, and so does a new

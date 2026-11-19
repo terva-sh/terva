@@ -50,8 +50,10 @@ the field have learned about this category, generalized and evidence-graded.
 | [personas.md](personas.md) | Personas and crews |
 | [raati.md](raati.md) | RAATI: the three-seat deliberation panel |
 | [talkoot.md](talkoot.md) | Talkoot: a persistent team of agents, with you in the loop |
+| [always-on.md](always-on.md) | Always on: a team that reaches you over chat, wakes itself, and runs routines that you approved |
+| [always-on-tour.md](always-on-tour.md) | A tour of the always-on features on a running daemon |
 | [workflows.md](workflows.md) | Scripted multi-agent orchestration: `terva workflow run` |
-| [permissions.md](permissions.md) | Approval modes, typed rules, the sandbox |
+| [permissions.md](permissions.md) | Approval modes, typed rules, the sandbox, and the rules for work that no person began |
 | [context-construction.md](context-construction.md) | What goes into the model's context each turn |
 | [image-generation.md](image-generation.md) | `generate_image` and its backends |
 | [native-image-output.md](native-image-output.md) | The model drawing images inline (`native_output`, Codex) |

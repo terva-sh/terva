@@ -47,6 +47,8 @@ var docsHeldBack = map[string]string{
 // means adding a line, which is the moment to ask whether it is public.
 var docsThatShip = []string{
 	"docs/README.md",
+	"docs/always-on-tour.md",
+	"docs/always-on.md",
 	"docs/cli.md",
 	"docs/connector-protocol.md",
 	"docs/connectors.md",

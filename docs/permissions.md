@@ -157,31 +157,9 @@ lets you revoke this session's grants (see below).
 |---|---|
 | `yolo` | every tool call runs without asking. `ask` rules don't prompt here, because yolo never prompts, but `deny` rules still block |
 | `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code. A foreign tool with the `network-read` authority still asks, even though it reads nothing locally. That includes a read-only tool on a remote MCP server, reached directly or through `terva-mcp-bridge` (see below) |
-| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends. While routines are on, a talkoot member's two calls to the person, described below the table, do not ask |
-| `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did). While routines are on, a talkoot member's two calls to the person do not ask |
+| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends |
+| `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did) |
 | `plan` | only read-only tools run, and mutating tools don't even enter the registry, so the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted. The one exception is a talkoot member's `talkoot_send` and `talkoot_handoff`, because a planning member's plan reaches its team as an envelope. Plan does not prompt for them, and your deny and ask rules still apply. An envelope starts the recipient's turn in the recipient's own posture, so a planning member can wake a member that writes. Write an ask rule for the two tools to approve each send |
-
-**While routines are on, two calls of a talkoot member go to the person
-with no approval card.** `talkoot_routines` in your user configuration turns
-routines on, and the foot of the rail in the Talkoot app says so while this
-holds. With routines off, `ask` and `auto-edit` ask for both calls, as they
-did before.
-
-One call is `talkoot_routine`, which only draws the card that you approve.
-The other is a `talkoot_send` whose every recipient is `human` or a
-`human:<name>` address. It writes to you, starts no turn and spends no
-budget. A routine's member works with nobody present, and a card then ends
-the work at its deadline, so such a member could not say what a run found.
-`plan` already ran both calls, so `ask` and `auto-edit` were the stricter
-postures and the looser ones for them.
-
-A `talkoot_send` with a member among its recipients still asks, because it
-starts that member's turn. An `ask` rule or a `deny` rule that you write for
-either tool still decides the call. Write an `ask` rule for `talkoot_send`
-when the team's messages to you leave the machine through a
-[chat bridge](talkoot.md#reach-the-team-from-chat) and you want to read each
-one first. A member whose turn read hostile text can put what it read into
-such a message.
 
 **Defaults differ by run mode.** An interactive session defaults to
 `workspace` (a human is present to answer the foreign-tool prompts) and

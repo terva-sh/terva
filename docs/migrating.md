@@ -73,6 +73,16 @@ The release cut runs it too, and refuses a stable break without a note.
 
 ## Unreleased
 
+No notes yet.
+
+### Unstable changes (no promise)
+
+No notes yet.
+
+## v0.142.0
+
+Since v0.141.7: 6 stable break(s) (0 removed, 6 changed), each with a note below, and 0 unstable break(s).
+
 ### The queue methods carry what wrote each text
 
 An entry of the agent's queue is now a `core.QueuedMessage`: the text, and a
@@ -122,10 +132,6 @@ Covers: `packages/core.Agent.ShiftQueuedMessage`,
 `packages/core.Agent.RequeueFront`,
 `packages/core.Agent.AddQueueDrainedObserver`,
 `packages/core.QueueObserver.QueueDrained`
-
-### Unstable changes (no promise)
-
-No notes yet.
 
 ## v0.140.0
 

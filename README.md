@@ -64,7 +64,7 @@ scripting, and an embeddable RPC/SDK.
 - run modes beyond the two UIs: an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding. Every front end is a thin client of one agent loop and one event stream, spoken over the `ctrlproto` control plane ([docs/controllers.md](docs/controllers.md)).
 - background subagents: fan work out to parallel **swarm** agents from within a session.
 - **RAATI**: convene a panel of models to argue a decision to a recorded verdict, instead of trusting one model's first answer. See [docs/raati.md](docs/raati.md).
-- **Talkoot**: run a persistent team of agents in one checkout, native terva members beside Claude Code, with roles, budgets, and an inbox where they ask you. Watch it in the web panel. See [docs/talkoot.md](docs/talkoot.md).
+- **Talkoot**: run a persistent team of agents in one checkout, native terva members beside Claude Code, with roles, budgets, and an inbox where they ask you. Watch it in the Talkoot app that `terva web` serves. The team can also work while you are away: it reaches you over a chat connector, a member looks at a result again later, and a routine that you approved runs on a schedule and never merges. See [docs/talkoot.md](docs/talkoot.md) and [docs/always-on.md](docs/always-on.md).
 - chat connectors: built-in telegram and discord bridges, **external
   connectors in any language** (separate executables speaking a small
   versioned JSON protocol), and connectors bundled inside extensions —
@@ -184,7 +184,7 @@ The reference guides:
 | [docs/cli.md](docs/cli.md) | Flags, tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`terva_status`/`task_*`/`session_inspect`), run modes, the data directory |
 | [docs/secrets.md](docs/secrets.md) | Secrets at rest (`terva secret`): the age key a new install generates, backing it up, rotation, and the `terva web` bearer token |
 | [docs/standard-tools.md](docs/standard-tools.md) | The tool-surface strategy: core vs standard extension vs MCP preset, and the roadmap for new tools |
-| [docs/permissions.md](docs/permissions.md) | Approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`, with `workspace` the interactive default), permission rules, and the jail-by-default sandbox |
+| [docs/permissions.md](docs/permissions.md) | Approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`, with `workspace` the interactive default), permission rules, the jail-by-default sandbox, and the two rules for work that no person began |
 | [docs/hooks.md](docs/hooks.md) | Pre/post tool-use hooks: veto, rewrite, or observe tool calls with your own scripts |
 | [docs/mcp.md](docs/mcp.md) | Attaching MCP servers as tool providers (stdio, namespaced, permission-gated) |
 | [docs/scripting.md](docs/scripting.md) | The in-engine JavaScript sandbox: `code_execution` and `code_execution_mutating`, with the host's tools as functions |
@@ -208,6 +208,7 @@ The reference guides:
 | [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
 | [docs/raati.md](docs/raati.md) | RAATI: the deliberation primitive — several models argue a decision to a recorded verdict |
 | [docs/talkoot.md](docs/talkoot.md) | Talkoot: a persistent team of agents in one checkout, with roles, budgets, guards, and an inbox for you |
+| [docs/always-on.md](docs/always-on.md) | Always on: the team reaches you over chat, wakes itself, and runs routines that you approved. The five-minute introduction, with a [tour](docs/always-on-tour.md) |
 | [docs/workflows.md](docs/workflows.md) | Scripted multi-agent orchestration with `terva workflow run`: a JavaScript program that spawns and sequences sub-agents |
 | [docs/context-construction.md](docs/context-construction.md) | What actually goes into the model's context each turn, and in what order |
 | [docs/debugging-prompts.md](docs/debugging-prompts.md) | Inspecting the assembled prompt (`--dump-prompt`), the lore engine, and card/lore/greeting troubleshooting |
