@@ -235,3 +235,57 @@ func (s *SessionState) SetComposer(d ComposerDraft) error {
 func (s *SessionState) ClearComposer() {
 	delete(s.raw, composerTenantKey)
 }
+
+// swarmBatchTenantKey is the state file's key for the sub-agent batch tenant.
+const swarmBatchTenantKey = "swarm_batch"
+
+// SwarmBatch is the sub-agent batch tenant: the sub-agents whose report has
+// not reached this session's transcript.
+//
+// 🔑 It is the host's state and not a client's, and it lives here because the
+// file's own rule fits it. A lost record costs one report after a restart,
+// which is what terva did before the record existed. It never stops a session
+// from opening.
+type SwarmBatch struct {
+	// Boot names the daemon instance that tracks these sub-agents. A session
+	// that finds another instance's name here was restarted under them.
+	Boot string `json:"boot,omitempty"`
+	// Agents holds the sub-agent ids, in spawn order. An id is the whole
+	// record: the swarm keeps the task, the transcript and how the task ended.
+	Agents []string `json:"agents"`
+}
+
+// SwarmBatch returns the sub-agent batch tenant, and whether one is present.
+// A tenant that fails to decode, or that names no sub-agent, is absent.
+func (s SessionState) SwarmBatch() (SwarmBatch, bool) {
+	b, ok := s.raw[swarmBatchTenantKey]
+	if !ok {
+		return SwarmBatch{}, false
+	}
+	var batch SwarmBatch
+	if err := json.Unmarshal(b, &batch); err != nil {
+		return SwarmBatch{}, false
+	}
+	if len(batch.Agents) == 0 {
+		return SwarmBatch{}, false
+	}
+	return batch, true
+}
+
+// SetSwarmBatch installs the sub-agent batch tenant, leaving every other
+// tenant alone. A batch that names no sub-agent clears it.
+func (s *SessionState) SetSwarmBatch(batch SwarmBatch) error {
+	if len(batch.Agents) == 0 {
+		delete(s.raw, swarmBatchTenantKey)
+		return nil
+	}
+	b, err := json.Marshal(batch)
+	if err != nil {
+		return fmt.Errorf("session state: encode swarm batch: %w", err)
+	}
+	if s.raw == nil {
+		s.raw = map[string]json.RawMessage{}
+	}
+	s.raw[swarmBatchTenantKey] = b
+	return nil
+}

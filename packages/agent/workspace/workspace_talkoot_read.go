@@ -154,12 +154,13 @@ func (r *talkootReads) forget(texts []string) {
 
 // split divides the texts a failed turn drained from its queue into the
 // deliveries that wait for a read, which stay queued, and the rest, which
-// the turn drops.
-func (r *talkootReads) split(queued []core.QueuedMessage) (kept, dropped []core.QueuedMessage) {
+// the turn drops. alsoKeep names one more kind of text that stays, and nil
+// names none.
+func (r *talkootReads) split(queued []core.QueuedMessage, alsoKeep func(core.QueuedMessage) bool) (kept, dropped []core.QueuedMessage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, m := range queued {
-		if r.pendingLocked(strings.TrimSpace(m.Text)) {
+		if r.pendingLocked(strings.TrimSpace(m.Text)) || (alsoKeep != nil && alsoKeep(m)) {
 			kept = append(kept, m)
 		} else {
 			dropped = append(dropped, m)

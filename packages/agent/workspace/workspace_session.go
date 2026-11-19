@@ -173,6 +173,12 @@ type wsSession struct {
 	// fire ONCE per batch (a single hold, then the coordinator idles and the
 	// queued recap re-engages it) rather than spinning while they run.
 	swarmGuardNudged bool
+	// swarmWatchStopped ends the watch with no report (stopSwarmWatch).
+	swarmWatchStopped bool
+	// swarmRecaps holds each recap that is queued and not yet in the
+	// transcript. The state file keeps their sub-agents until then
+	// (workspace_swarm_record.go). Guarded by swarmWatchMu.
+	swarmRecaps []swarmRecapWait
 
 	// sidechat holds this session's open /btw snapshots — frozen system + msgs
 	// + client, keyed by an id minted at open. Guarded by its own mutex, and
@@ -612,7 +618,7 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// one: the loop's own drain at a mid-turn safe boundary, which is what this
 	// closes. Broadcast the queue as it stands rather than the drained list, so
 	// a message queued in the same breath is not overwritten by a stale empty.
-	ag.AddQueueDrainedObserver(func([]core.QueuedMessage) { s.broadcastQueue() })
+	ag.AddQueueDrainedObserver(s.queueDrained)
 	// A talkoot member's reads, attached before any turn so the first one
 	// sees a guard's refusal.
 	s.reads.watch.Do(func() { s.reads.attach(ag) })
@@ -710,6 +716,9 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 		}
 		build.BindSession(build.SessionBinding{Ext: extMgr, Session: sess})
 	}()
+	// Last, when the queue and its observers exist. A batch of sub-agents
+	// that a restart stopped is reported here, and it starts no turn.
+	s.restoreSwarmBatch()
 	return s, nil
 }
 
@@ -997,12 +1006,21 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock, extras
 		// Runs after endTurn, so this lands on a settled queue rather than one
 		// the release is still shifting. Front, not back: this text was composed
 		// before anything queued behind it.
+		// The source went into the prompt with extras, so it comes back out
+		// of them.
+		m := core.QueuedMessage{Text: text, Source: extras.Meta[core.MetaSource]}
 		if refused.Load() {
-			// The source went into the prompt with extras, so it comes back
-			// out of them. A text that waits again keeps its writer.
-			s.agent.RequeueFront(core.QueuedMessage{Text: text, Source: extras.Meta[core.MetaSource]})
+			// A text that waits again keeps its writer.
+			s.agent.RequeueFront(m)
 			s.broadcastQueue()
+			return
 		}
+		// 🔑 The turn took the text, so a sub-agent recap that started it has
+		// left the queue for good. The record goes at the end of the turn and
+		// not at its start: a turn that the agent refuses puts the text back,
+		// and a daemon that stops in the middle of this turn reports the
+		// batch again, to a coordinator whose answer was cut off.
+		s.swarmRecapLeft(m)
 	})
 	return nil
 }
@@ -1441,8 +1459,11 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next core.Queue
 		// ⚠️ The kept texts go back at the front, oldest first. A text can
 		// reach the queue without s.mu, and one that lands between the
 		// drain and here is newer, so it goes behind them.
+		//
+		// 🔑 A sub-agent recap stays for the same reason. Nobody can send it
+		// again, and it starts no turn.
 		var kept []core.QueuedMessage
-		kept, dropped = s.reads.split(s.agent.DrainQueuedMessages())
+		kept, dropped = s.reads.split(s.agent.DrainQueuedMessages(), s.swarmRecapWaits)
 		for i := len(kept) - 1; i >= 0; i-- {
 			s.agent.RequeueFront(kept[i])
 		}
@@ -2598,6 +2619,13 @@ func (s *wsSession) setQueue(entries []core.QueuedMessage, known bool) {
 	// ⚠️ A talkoot delivery that the edit removes keeps its waiting entry,
 	// which matches nothing. Forgetting it here would race the loop's drain:
 	// a text drained between a snapshot and this replace is being read.
+	//
+	// 🔑 s.mu is held across the replacement, so that the queue on each side
+	// of it can be compared. A sub-agent recap that the client removed is one
+	// that was there before and is not there after. Each place that takes a
+	// text out of the queue for a turn holds s.mu, so none can come between.
+	s.mu.Lock()
+	before := s.agent.PendingQueuedMessages()
 	if known {
 		s.agent.SetQueuedEntries(entries)
 	} else {
@@ -2606,6 +2634,22 @@ func (s *wsSession) setQueue(entries []core.QueuedMessage, known bool) {
 			texts[i] = e.Text
 		}
 		s.agent.SetQueuedMessages(texts)
+	}
+	removed := s.swarmRecapsRemoved(before, s.agent.PendingQueuedMessages())
+	s.mu.Unlock()
+	// The state file is written after s.mu is free.
+	for _, m := range removed {
+		s.swarmRecapLeft(m)
+	}
+	s.broadcastQueue()
+}
+
+// queueDrained runs when the loop took queued texts into the transcript at a
+// safe boundary. A sub-agent recap among them has left the queue for good,
+// and every client learns that the queue changed.
+func (s *wsSession) queueDrained(drained []core.QueuedMessage) {
+	for _, m := range drained {
+		s.swarmRecapLeft(m)
 	}
 	s.broadcastQueue()
 }
@@ -2922,6 +2966,9 @@ func (s *wsSession) close() {
 	s.sidechatMu.Lock()
 	s.sidechats = nil
 	s.sidechatMu.Unlock()
+	// Before the turn stops, so that a sub-agent that ends now reports into
+	// no session. The state file keeps its id for the next start.
+	s.stopSwarmWatch()
 	// Teardown, not an interrupt: the session itself is going away, so this
 	// speaks for the host and not for the user (see cancelTurn).
 	s.cancelTurn()

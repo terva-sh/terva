@@ -43,6 +43,10 @@ var sessionMayReachWorkspace = map[string]string{
 	"sandbox":    "the filesystem sandbox is a workspace-scoped posture — /jail confines every session at once",
 	"diag":       "host-side diagnostics sink; the TUI overrides it so a stray stderr write cannot corrupt the alternate screen",
 
+	// --- the sub-agent batch a restart must report ---
+	"editSwarmBatch":       "a session records which sub-agents wait for a report; the workspace holds the state lock and signs the record with the daemon instance's name",
+	"swarmBatchFromBefore": "a session asks once, when it is built, for the sub-agents that an earlier daemon instance left with no report",
+
 	// --- content stores, keyed by workspace paths ---
 	"cardStore": "the character-card library lives at a workspace path, not a session one",
 	"cardName":  "resolves a card id to its display name out of that same library",
@@ -79,6 +83,8 @@ var sessionMayReachWorkspace = map[string]string{
 	"chatStopForSession": "tears down this session's bridges out of that workspace-owned registry",
 	"AuthProviders":      "the providers pane reports DAEMON credential state — a credential belongs to the workspace, not a conversation",
 	"canLogin":           "whether that pane may render login controls at all, which only the workspace knows (EnableAuth)",
+	"timersShown":        "the timers pane is workspace-scoped: the daemon owns one timer service, and a session only lists the pane",
+	"timersPanel":        "renders that same pane from the daemon's timers, which belong to no conversation",
 	"note":               "the keyed note surface is the HOST's (one sticky block per daemon); a session posts its cache-cliff warning there and close() retracts it, because the note must not outlive the session it describes",
 
 	// --- talkoot seats ---

@@ -233,3 +233,57 @@ func TestDefaultChildArgsCarriesReasoning(t *testing.T) {
 		t.Fatalf("resumed argv missing --reasoning low: %v", args)
 	}
 }
+
+// LastTaskEnd tells a task that ran to its end from one that was stopped,
+// and from one whose log has no end at all. The recap after a restart rests
+// on the difference, because the agent's status is "done" in all three.
+func TestLastTaskEndTellsAStopFromAnEnd(t *testing.T) {
+	msg := NewEvent("assistant_message", map[string]any{})
+	coreTurn := NewEvent("turn_end", map[string]any{"stop": "end"}) // a core turn, not a task
+	cases := []struct {
+		name            string
+		evs             []Event
+		wantErr         string
+		wantInterrupted bool
+		wantOK          bool
+	}{
+		{name: "no end: the child died", evs: []Event{msg, coreTurn}},
+		{name: "ran to its end", evs: []Event{msg, NewEvent("task_end", map[string]any{"step": float64(1), "error": ""})}, wantOK: true},
+		{name: "ended with an error", evs: []Event{NewEvent("task_end", map[string]any{"step": float64(1), "error": "boom"})}, wantErr: "boom", wantOK: true},
+		{name: "stopped by a shutdown", evs: []Event{
+			NewEvent("task_end", map[string]any{"step": float64(1), "error": "context canceled", "interrupted": true}),
+			NewEvent("agent_stopped", map[string]any{"reason": "shutdown"}),
+		}, wantErr: "context canceled", wantInterrupted: true, wantOK: true},
+		{name: "the newest end decides", evs: []Event{
+			NewEvent("task_end", map[string]any{"step": float64(1), "error": ""}),
+			NewEvent("task_end", map[string]any{"step": float64(2), "error": "context canceled", "interrupted": true}),
+		}, wantErr: "context canceled", wantInterrupted: true, wantOK: true},
+		{name: "the legacy form", evs: []Event{NewEvent("turn_end", map[string]any{"step": float64(1), "error": ""})}, wantOK: true},
+		// A child that finished one task, took a second, and died in it. The
+		// first task's end is not the newest task's.
+		{name: "a second task with no end", evs: []Event{
+			NewEvent("turn_start", map[string]any{"step": float64(1)}),
+			NewEvent("task_end", map[string]any{"step": float64(1), "error": ""}),
+			NewEvent("turn_start", map[string]any{"step": float64(2)}),
+			msg,
+		}},
+		{name: "a second task that only got its message", evs: []Event{
+			NewEvent("task_end", map[string]any{"step": float64(1), "error": ""}),
+			NewEvent("user_message", map[string]any{}),
+		}},
+		{name: "a second task that ended", evs: []Event{
+			NewEvent("task_end", map[string]any{"step": float64(1), "error": "boom"}),
+			NewEvent("turn_start", map[string]any{"step": float64(2)}),
+			msg, coreTurn,
+			NewEvent("task_end", map[string]any{"step": float64(2), "error": ""}),
+			NewEvent("agent_stopped", map[string]any{"reason": "shutdown"}),
+		}, wantOK: true},
+	}
+	for _, c := range cases {
+		gotErr, gotInterrupted, gotOK := LastTaskEnd(c.evs)
+		if gotErr != c.wantErr || gotInterrupted != c.wantInterrupted || gotOK != c.wantOK {
+			t.Errorf("%s: LastTaskEnd = (%q, %v, %v), want (%q, %v, %v)",
+				c.name, gotErr, gotInterrupted, gotOK, c.wantErr, c.wantInterrupted, c.wantOK)
+		}
+	}
+}

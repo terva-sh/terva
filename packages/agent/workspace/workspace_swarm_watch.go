@@ -91,6 +91,10 @@ func (s *wsSession) trackSwarmAgentEntry(a *swarm.Agent, task string) *swarmWatc
 	if s == nil || a == nil {
 		return nil
 	}
+	// 🔑 The record goes to disk before the watch starts. A child that fails
+	// at once can end its batch and clear the record, and an id written after
+	// that would stay with nothing to report it.
+	s.editSwarmBatch(func(ids []string) []string { return appendID(ids, a.ID) })
 	entry := &swarmWatchEntry{agent: a, task: task}
 	s.swarmWatchMu.Lock()
 	s.swarmWatch = append(s.swarmWatch, entry)
@@ -103,6 +107,21 @@ func (s *wsSession) trackSwarmAgentEntry(a *swarm.Agent, task string) *swarmWatc
 		s.finalizeSwarmEntry(entry, "")
 	}()
 	return entry
+}
+
+// stopSwarmWatch ends the watch without a report. A session that closes calls
+// it, and so does a daemon that shuts down, before it stops the sub-agents.
+//
+// 🚨 Without it, the stop of each sub-agent reads as the end of its task. The
+// batch then reports itself as finished into a session that is going away,
+// and the record that the next start needs is cleared.
+func (s *wsSession) stopSwarmWatch() {
+	if s == nil {
+		return
+	}
+	s.swarmWatchMu.Lock()
+	s.swarmWatchStopped = true
+	s.swarmWatchMu.Unlock()
 }
 
 // swarmGuardHold reports whether the coordinator should be held back from
@@ -129,7 +148,7 @@ func (s *wsSession) swarmGuardHold() bool {
 // the winning call so a turn-level error survives into the recap.
 func (s *wsSession) finalizeSwarmEntry(entry *swarmWatchEntry, errMsg string) {
 	s.swarmWatchMu.Lock()
-	if entry.done {
+	if entry.done || s.swarmWatchStopped {
 		s.swarmWatchMu.Unlock()
 		return
 	}
@@ -202,6 +221,23 @@ func findingsBudgets(need []int) []int {
 	return out
 }
 
+// swarmRecapRow is one sub-agent's part of a recap.
+type swarmRecapRow struct {
+	id   string
+	snap swarm.AgentSnapshot
+	// missing says that the swarm has no record of the sub-agent. A person
+	// removed it, or the retention sweep took it.
+	missing bool
+	// task is the task the watch recorded, for a snapshot that has none.
+	task    string
+	turnErr string
+	// stopped says that the task did not run to its own end.
+	stopped bool
+	// resumed says that a person started the sub-agent again after the
+	// restart, so it is at work now. It is set with stopped.
+	resumed bool
+}
+
 // flushSwarmSummary composes the recap describing every sub-agent's outcome and
 // injects it via the session queue so the coordinator picks it up at the next
 // safe boundary (or immediately, if idle). Phrased as observed state, not a
@@ -211,46 +247,89 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 	if len(batch) == 0 {
 		return
 	}
+	rows := make([]swarmRecapRow, len(batch))
+	ids := make([]string, len(batch))
+	for i, e := range batch {
+		rows[i] = swarmRecapRow{id: e.agent.ID, snap: e.agent.Snapshot(), task: e.task, turnErr: e.err}
+		ids[i] = e.agent.ID
+	}
+	text, spent := swarmRecapText(
+		i18n.P("swarm.summary.header", "[auto-swarm update] %d sub-agent(s) finished:", len(batch)),
+		rows,
+		i18n.P("swarm.summary.instruction", "This note reports the state of sub-agents you started. It is not a new user request. Summarize the collective outcome for the user in brief, and reference the agents by id. If any failed, suggest a follow-up. Otherwise confirm completion. Do not start new sub-agents unless the user asks."),
+	)
+	// 🔑 The batch ended here, so its spend is booked here, once. A recap can
+	// wait in the queue for a long time, and a daemon that stops while it
+	// waits must not lose what the batch cost.
+	if s.agent != nil {
+		for _, u := range spent {
+			s.agent.RecordDelegatedUsage(u)
+		}
+	}
+	// 🔑 The wait is recorded before the text is queued. An idle session takes
+	// the text into a turn inside queueFrom, and the end of that turn clears
+	// the wait.
+	s.awaitSwarmRecap(text, ids)
+	s.queueFrom(ctrlproto.QueueSourceSwarmRecap, text)
+}
+
+// swarmRecapText writes one recap: the header, a block for each sub-agent,
+// the cost of the batch, and the instruction.
+//
+// 🔑 It books nothing. spent is what each sub-agent used, and the caller
+// decides whether to book it. A batch that ends books it once
+// (flushSwarmSummary). A restart writes the recap of one batch again for each
+// start that finds it still waiting, so a writer that booked would count the
+// batch once for each.
+func swarmRecapText(header string, rows []swarmRecapRow, instruction string) (text string, spent []provider.Usage) {
 	var sb strings.Builder
-	sb.WriteString(i18n.P("swarm.summary.header", "[auto-swarm update] %d sub-agent(s) finished:", len(batch)))
+	sb.WriteString(header)
 	sb.WriteString("\n\n")
 	// Snapshot once per entry: Findings is consulted for the budget split and
 	// again when rendering, and a live child could otherwise answer the two
 	// calls differently — allocating against one report and printing another.
-	snaps := make([]swarm.AgentSnapshot, len(batch))
-	need := make([]int, len(batch))
-	for i, e := range batch {
-		snaps[i] = e.agent.Snapshot()
-		need[i] = len(snaps[i].Findings())
+	need := make([]int, len(rows))
+	for i, r := range rows {
+		need[i] = len(r.snap.Findings())
 	}
 	budgets := findingsBudgets(need)
 	var batchUsage provider.Usage
-	for idx, e := range batch {
-		snap := snaps[idx]
+	for idx, r := range rows {
+		if r.missing {
+			sb.WriteString(i18n.P("swarm.summary.agent_missing", "%d. agent %s, status: no record. terva does not have the files of this sub-agent now", idx+1, r.id))
+			sb.WriteString("\n\n")
+			continue
+		}
+		snap := r.snap
 		// The snapshot's own Err and the batch entry's turn error are two ways
 		// the same task can have failed; either one makes "completed" a lie.
 		turnErr := snap.Err
 		if turnErr == "" {
-			turnErr = e.err
+			turnErr = r.turnErr
 		}
 		status := snap.RecapStatus(turnErr)
-		// Book what this child spent against the session that ordered it, and
-		// sum the batch for the closing line. A failed child still counts: it
-		// spent real money before it died, and the whole point of this is that
-		// the coordinator's record match what its decisions cost.
+		switch {
+		case r.resumed:
+			status = i18n.P("swarm.summary.status_resumed", "stopped by the restart, and at work again because a person started it again")
+		case r.stopped:
+			status = i18n.P("swarm.summary.status_stopped", "stopped before the task finished")
+		}
+		// What this child spent, for the session that ordered it and for the
+		// closing line. A failed child still counts: it spent real money
+		// before it died, and the whole point of this is that the
+		// coordinator's record match what its decisions cost.
 		//
-		// Safe to add rather than diff here because a batch entry is finalised
-		// once (trackSwarmAgent's two finalisers are idempotent), so each
-		// child's cumulative is booked exactly once.
+		// The figure is the child's cumulative, so the session adds it and
+		// does not diff it. That is safe because a batch entry is finalised
+		// once (trackSwarmAgent's two finalisers are idempotent), so a batch
+		// ends once.
 		if u := snap.Usage; u != (provider.Usage{}) {
 			batchUsage = batchUsage.Add(u)
-			if s.agent != nil {
-				s.agent.RecordDelegatedUsage(u)
-			}
+			spent = append(spent, u)
 		}
 		task := snap.Task
 		if task == "" {
-			task = e.task
+			task = r.task
 		}
 		sb.WriteString(i18n.P("swarm.summary.agent_line", "%d. agent %s, status: %s", idx+1, snap.ID, status))
 		sb.WriteByte('\n')
@@ -285,15 +364,25 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		if snap.Err != "" {
 			sb.WriteString(i18n.P("swarm.summary.error", "   error: %s", truncateForSummary(snap.Err, 240)))
 			sb.WriteByte('\n')
-		} else if e.err != "" {
-			sb.WriteString(i18n.P("swarm.summary.turn_error", "   turn error: %s", truncateForSummary(e.err, 240)))
+		} else if r.turnErr != "" {
+			sb.WriteString(i18n.P("swarm.summary.turn_error", "   turn error: %s", truncateForSummary(r.turnErr, 240)))
 			sb.WriteByte('\n')
 		}
 		// The sub-agent's own answer — its findings — not a tail of tool
 		// output. For a review specialist this IS the deliverable the
 		// coordinator must fold into the report, so the budget is generous;
 		// see findingsBudgets for why generous is also the CHEAP option.
-		if findings := snap.Findings(); findings != "" {
+		if findings := snap.Findings(); r.stopped {
+			// 🔑 A sub-agent that did not finish has no findings. Its newest
+			// message can be a line about the next step, so the label says
+			// what the text is.
+			if findings == "" {
+				sb.WriteString(i18n.P("swarm.summary.stopped_no_message", "   last message before the stop: none"))
+			} else {
+				sb.WriteString(i18n.P("swarm.summary.stopped_message", "   last message before the stop: %s", truncateForSummary(findings, budgets[idx])))
+			}
+			sb.WriteByte('\n')
+		} else if findings != "" {
 			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, budgets[idx])))
 			sb.WriteByte('\n')
 		} else {
@@ -331,11 +420,11 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 	// delegated spend against a launching session that recorded $5.36 — the
 	// coordinator could have reported the small number in good faith.
 	if batchUsage.CostUSD > 0 {
-		sb.WriteString(i18n.P("swarm.summary.batch_cost", "Batch cost: $%.4f across %d sub-agent(s), spent on the credentials of this session.", batchUsage.CostUSD, len(batch)))
+		sb.WriteString(i18n.P("swarm.summary.batch_cost", "Batch cost: $%.4f across %d sub-agent(s), spent on the credentials of this session.", batchUsage.CostUSD, len(rows)))
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(i18n.P("swarm.summary.instruction", "This note reports the state of sub-agents you started. It is not a new user request. Summarize the collective outcome for the user in brief, and reference the agents by id. If any failed, suggest a follow-up. Otherwise confirm completion. Do not start new sub-agents unless the user asks."))
-	s.queueFrom(ctrlproto.QueueSourceSwarmRecap, sb.String())
+	sb.WriteString(instruction)
+	return sb.String(), spent
 }
 
 // truncateForSummary bounds a recap field, ellipsizing overflow.

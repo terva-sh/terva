@@ -470,6 +470,39 @@ func TaskTurnEnd(ev Event) (step int, errMsg string, ok bool) {
 	return taskLevelTurnEnd(ev)
 }
 
+// LastTaskEnd reads an agent's event log for how its newest task ended.
+//
+// ok is false when the newest task has no end in the log, which is a child
+// that died or was killed in the middle of it. interrupted is true when the
+// child was asked to stop before the task finished, which is what a shutdown
+// of the host does. Only a task end with interrupted false is a task that ran
+// to its own end, and errMsg is then the error it ended with, if any.
+//
+// 🔑 The log is the evidence because the status is not. A graceful shutdown
+// leaves every child as done, whether its task finished or not.
+//
+// 🚨 The scan stops at the first sign of work, and reads that as no end. A
+// child can finish one task, take a second, and die in it. The end of the
+// first task is then in the log, and it is not the end of the newest one. A
+// turn start or a user message with no task end after it is a task in
+// progress.
+//
+// ⚠️ A backend that logs neither event for its work cannot show a second task
+// that has no end. Its older end is then read as the newest.
+func LastTaskEnd(evs []Event) (errMsg string, interrupted, ok bool) {
+	for i := len(evs) - 1; i >= 0; i-- {
+		if _, e, is := taskLevelTurnEnd(evs[i]); is {
+			stopped, _ := evs[i].Data["interrupted"].(bool)
+			return e, stopped, true
+		}
+		switch evs[i].Type {
+		case "turn_start", "user_message":
+			return "", false, false
+		}
+	}
+	return "", false, false
+}
+
 // taskLevelTurnEnd reports whether ev marks a swarm task completing —
 // one whole ag.Prompt round returning — as opposed to the core
 // agent's per-turn turn_end events fired after every internal turn of

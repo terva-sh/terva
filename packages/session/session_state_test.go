@@ -268,3 +268,66 @@ func TestSettingOneTenantLeavesTheOthersAlone(t *testing.T) {
 		t.Errorf("other_tenant was lost: %s", b)
 	}
 }
+
+// The sub-agent batch is the file's second tenant. It and the composer draft
+// must each survive a write of the other, because the daemon writes one while
+// a client writes the other.
+func TestTheSwarmBatchAndTheDraftKeepEachOther(t *testing.T) {
+	path := statePath(t)
+
+	state := LoadSessionState(path)
+	if err := state.SetComposer(ComposerDraft{Text: "half a thought"}); err != nil {
+		t.Fatalf("SetComposer: %v", err)
+	}
+	if err := SaveSessionState(path, state); err != nil {
+		t.Fatalf("save the draft: %v", err)
+	}
+
+	state = LoadSessionState(path)
+	if err := state.SetSwarmBatch(SwarmBatch{Boot: "one", Agents: []string{"a-1", "b-2"}}); err != nil {
+		t.Fatalf("SetSwarmBatch: %v", err)
+	}
+	if err := SaveSessionState(path, state); err != nil {
+		t.Fatalf("save the batch: %v", err)
+	}
+
+	state = LoadSessionState(path)
+	batch, ok := state.SwarmBatch()
+	if !ok || batch.Boot != "one" || strings.Join(batch.Agents, ",") != "a-1,b-2" {
+		t.Fatalf("the batch read back as %+v (present=%v), want two ids under the name one", batch, ok)
+	}
+	if d, ok := state.Composer(); !ok || d.Text != "half a thought" {
+		t.Fatalf("the batch's write lost the draft: %+v (present=%v)", d, ok)
+	}
+
+	// A batch that names no sub-agent is no batch, and it leaves the draft.
+	if err := state.SetSwarmBatch(SwarmBatch{Boot: "one"}); err != nil {
+		t.Fatalf("clear the batch: %v", err)
+	}
+	if err := SaveSessionState(path, state); err != nil {
+		t.Fatalf("save the cleared batch: %v", err)
+	}
+	state = LoadSessionState(path)
+	if _, ok := state.SwarmBatch(); ok {
+		t.Fatal("a batch that names no sub-agent read back as present")
+	}
+	if _, ok := state.Composer(); !ok {
+		t.Fatal("the clear of the batch took the draft with it")
+	}
+}
+
+// A batch that does not decode is absent. It must not cost the session its
+// other state, and it must not read as a batch with no sub-agent to report.
+func TestAMalformedSwarmBatchIsAbsent(t *testing.T) {
+	path := statePath(t)
+	if err := os.WriteFile(path, []byte(`{"version":1,"swarm_batch":"not an object","composer":{"text":"kept","source":"user"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := LoadSessionState(path)
+	if batch, ok := state.SwarmBatch(); ok {
+		t.Fatalf("a malformed batch read back as %+v", batch)
+	}
+	if d, ok := state.Composer(); !ok || d.Text != "kept" {
+		t.Fatalf("a malformed batch cost the draft: %+v (present=%v)", d, ok)
+	}
+}

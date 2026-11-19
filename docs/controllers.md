@@ -277,7 +277,7 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `sessions.archived` | → `{sessions:[ArchivedSessionInfo]}` | what is in this directory's archive, newest first. Rows carry the same descriptive fields a live one does (title, model, message count, preview) because an archive of opaque ids is one nobody restores from; `bytes`/`original` are the two facts that exist only once archived. Read-only |
 | `sessions.restore` | `{id}` → `{SessionInfo}` | decompress an archived transcript back into the sessions directory, where every listing sees it again. The id travels in **params, not the frame's `sess`**: `sess` is a live handle that subscriptions and turn routing key on, and an id resolving to no live session has no business being addressed as one |
 | `sessions.discard_draft` | — | reclaim an unpromoted draft the moment the user navigates away without sending. A fresh Stage chat defers its greeting, so a character opened only for preview stays a meta-only draft. Closes its live session (and any extension subprocesses it holds) rather than waiting for shutdown or the next boot-prune. A guarded **no-op** on anything that is not an unpromoted draft, so it can never discard real work. Optional (a `DraftController`) |
-| `sessions.state` | → `{composer?:ComposerDraft}` | the session's durable **client** state, which the daemon keeps beside the transcript at `<session>.state.json`. Today one tenant: `composer`, the message the user typed and did not send. Serving it here rather than in each front end is what makes it ONE draft: the TUI and the web panel see the same unsent text instead of each keeping a private copy. A session with no state file is not an error, it is an empty result. Read-only; optional (a `SessionStateController`) |
+| `sessions.state` | → `{composer?:ComposerDraft}` | the session's durable **client** state, which the daemon keeps beside the transcript at `<session>.state.json`. Today one tenant reaches a client: `composer`, the message the user typed and did not send. The file also holds a record of the daemon's own, `swarm_batch`, which names the sub-agents that have not reported, and no verb returns it. Serving it here rather than in each front end is what makes it ONE draft: the TUI and the web panel see the same unsent text instead of each keeping a private copy. A session with no state file is not an error, it is an empty result. Read-only; optional (a `SessionStateController`) |
 | `sessions.set_composer` | `{text, source?}` | write the composer tenant, leaving every other tenant untouched. Blank `text` **clears** it. `source` is `user` (the default) or `suggestion`, and it decides how the text comes back: the user's own words are restored into the composer, the model's are offered as a ghost to accept. A draft over the 64 KiB cap is **refused**, so nothing is written, so a client can say the draft was not kept rather than store a prefix of it that looks whole. There is deliberately no `sessions.set_state`: a whole-document setter lets a client that names only the tenants it knows delete the ones it does not |
 | `sessions.export` | `{format?}` → `{SessionExport}` | serialize the session for something outside terva. `markdown` (the default) renders the played scene as a readable story: YAML front matter, each turn under its speaker, lossy on purpose: no tool calls, no reasoning, no unchosen variants. `tervasession` is the lossless raw-JSONL round-trip. One verb with a format discriminator rather than a verb per format, matching `cards.export`: different audiences for the same act, not different acts. Unknown formats are refused rather than defaulted. Optional (an `ExportController`) |
 | `usage.get` | → `{usage}` | cumulative tokens / cost |
@@ -662,6 +662,14 @@ alone cannot say which of the two was removed.
 when the queue holds an entry with that text and that source. Every other
 text becomes the person's own, and a text that the person changed is one of
 those.
+
+A session that runs no turn can hold a queued text. terva restarts with a
+batch of sub-agents not yet reported, and the report then waits in the queue
+of the session that started them. It starts no turn, because nobody asked for
+one. The session's next turn takes it, whoever starts that turn. A snapshot of
+an idle session can therefore carry `queued`, and a client shows it as it
+shows any other queued text. A person can remove it with `queue.set`, and
+terva then does not report that batch again.
 
 A client that sends no `sources` is an older one. The session then matches by
 text alone: a text that is still in the queue keeps the source it had, and
