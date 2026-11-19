@@ -94,6 +94,11 @@ type Driver struct {
 	mu  sync.RWMutex
 	ext map[string]*Extension // keyed by manifest name
 
+	// eventMu orders broadcasts and readiness replays on the same outbox.
+	eventMu           sync.Mutex
+	sessionStart      *extproto.EventFromHost
+	sessionGeneration uint64
+
 	// commandIndex maps a slash-command name (without the leading /)
 	// to the extension that registered it. First-come-first-served:
 	// later registrations of the same command are dropped with a
@@ -913,6 +918,7 @@ func (d *Driver) assumeReadyAfterIdle(ext *Extension) {
 				ext.diagnostics = append(ext.diagnostics, "no ready frame; auto-ready after idle")
 				ext.mu.Unlock()
 				fmt.Fprintf(ext.logFile, "[terva] no ready frame; auto-readying after idle (legacy SDK?)\n")
+				d.replaySessionStart(ext)
 				close(ext.readyCh)
 			})
 			return
@@ -1342,6 +1348,7 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 			}
 			d.registerTool(ext, rt)
 		case "ready":
+			d.replaySessionStart(ext)
 			ext.readyOnce.Do(func() { close(ext.readyCh) })
 		case "subscribe":
 			var sub extproto.SubscribeFromExt
@@ -1355,6 +1362,9 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 					}
 				}
 				ext.mu.Unlock()
+			}
+			if ext.Ready() {
+				d.replaySessionStart(ext)
 			}
 		case "event_intercept_response":
 			var er extproto.EventInterceptResponseFromExt

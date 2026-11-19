@@ -23,7 +23,18 @@ import (
 // Event names are documented on extproto.EventFromHost. Unknown event
 // names are still routed (subscribers can use any string they want).
 func (d *Driver) EmitEvent(ev extproto.EventFromHost) {
+	d.eventMu.Lock()
+	defer d.eventMu.Unlock()
 	ev.Type = "event"
+	switch ev.Event {
+	case extproto.EventSessionStart:
+		d.sessionGeneration++
+		d.sessionStart = &ev
+	case extproto.EventSessionEnd:
+		if d.sessionStart != nil && d.sessionStart.SessionID == ev.SessionID {
+			d.sessionStart = nil
+		}
+	}
 	d.mu.RLock()
 	subs := make([]*Extension, 0, len(d.ext))
 	for _, ext := range d.ext {
@@ -49,9 +60,44 @@ func (d *Driver) EmitEvent(ev extproto.EventFromHost) {
 		if ext.outbox == nil {
 			continue
 		}
-		if err := ext.enqueueFrame(frame, false); err == errOutboxFull {
+		err := ext.enqueueFrame(frame, false)
+		if err == nil && ev.Event == extproto.EventSessionStart {
+			ext.lastSessionGeneration = d.sessionGeneration
+		}
+		if err == errOutboxFull {
 			fmt.Fprintf(ext.logFile, "[terva] dropped %q event: outbox full (extension not keeping up)\n", ev.Event)
 		}
+	}
+}
+
+// Replay keeps the lifecycle outbox's non-blocking policy: a full queue logs
+// a drop rather than delaying readiness.
+func (d *Driver) replaySessionStart(ext *Extension) {
+	d.eventMu.Lock()
+	defer d.eventMu.Unlock()
+	if d.sessionStart == nil || ext.lastSessionGeneration == d.sessionGeneration || ext.outbox == nil {
+		return
+	}
+	d.mu.RLock()
+	current := d.ext[ext.Manifest.Name] == ext
+	d.mu.RUnlock()
+	if !current || ext.stopping.Load() {
+		return
+	}
+	ext.mu.Lock()
+	_, subscribed := ext.eventSubs[extproto.EventSessionStart]
+	ext.mu.Unlock()
+	if !subscribed {
+		return
+	}
+	frame, err := extproto.Encode(*d.sessionStart)
+	if err != nil {
+		return
+	}
+	if err := ext.enqueueFrame(frame, false); err == nil {
+		ext.lastSessionGeneration = d.sessionGeneration
+	} else if err == errOutboxFull {
+		fmt.Fprintln(ext.logFile, "[terva] dropped session_start replay: outbox full (extension not keeping up)")
 	}
 }
 

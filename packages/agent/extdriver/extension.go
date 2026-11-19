@@ -204,6 +204,9 @@ type Extension struct {
 	eventSubs     map[string]struct{}
 	interceptSubs map[string]struct{}
 
+	// The owning driver's eventMu guards this delivery receipt.
+	lastSessionGeneration uint64
+
 	// Host context contributions (protocol 2), guarded by mu:
 	//   staticContext  — register_context: folded into the cached
 	//                    system-prompt addendum.
