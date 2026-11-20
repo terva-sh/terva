@@ -90,7 +90,7 @@ func WriteFileMode(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return replace(tmpName, path)
 }
 
 // RepairTree walks root and tightens any file or directory whose group or other
