@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -885,6 +886,9 @@ func TestOpenRefusesAFileItCannotReadAndLeavesIt(t *testing.T) {
 // The file is private: an owner's data can name what a person asked the
 // agent to watch.
 func TestTheFileIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a file of Windows has no mode for a group or for others")
+	}
 	path := filepath.Join(testsupport.TempDir(t), "state", "timers.json")
 	s := open(t, path, newFakeClock(t0))
 	mustSet(t, s, Timer{Owner: "a", ID: "x", Schedule: Schedule{At: t0.Add(time.Hour)}})

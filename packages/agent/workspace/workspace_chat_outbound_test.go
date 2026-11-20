@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -237,7 +238,8 @@ func TestTheQueueSurvivesARestart(t *testing.T) {
 	if len(got) != 2 || got[0] != "jev proposed a change" || !strings.Contains(got[1], "jev: the build is green") {
 		t.Fatalf("after a restart the end of quiet hours sent %v, want the decision and then the brief that came due", got)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	// A file of Windows has no mode for a group or for others.
+	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("the queue's file: %v, %v, want a private file", info, err)
 	}
 

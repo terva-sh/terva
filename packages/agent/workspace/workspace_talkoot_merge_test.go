@@ -124,6 +124,12 @@ esac
 			t.Fatal(err)
 		}
 	}
+	// ⚠️ macOS ships no timeout, and a test that runs "timeout 100 just ..."
+	// must not need the one of the machine. This one drops the time and runs
+	// the command.
+	if err := os.WriteFile(filepath.Join(bin, "timeout"), []byte("#!/bin/sh\nshift\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return f
 }

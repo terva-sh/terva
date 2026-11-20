@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -407,6 +408,18 @@ func eventFiles(t *testing.T) (oldPath, newPath string) {
 	return oldPath, newPath
 }
 
+// inJSON is s as the body of a request holds it. runRead reads that body as
+// it went out, and a path of Windows has a backslash, which JSON writes as
+// two.
+func inJSON(t *testing.T, s string) string {
+	t.Helper()
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw[1 : len(raw)-1])
+}
+
 // put hands ev to the team, and returns what its source heard.
 func put(t *testing.T, w *Workspace, ev outsideEvent) (started bool) {
 	t.Helper()
@@ -435,7 +448,7 @@ func TestAnEventOfASecondSourceStartsARun(t *testing.T) {
 		t.Fatal("a source must hear that the room holds its event's run")
 	}
 	waitRunEnds(t, w, "the end of the run", 1)
-	if !runRead(p, "The source of this event is forge-hook.", "The output before the change: "+oldPath, "The output now: "+newPath) {
+	if !runRead(p, "The source of this event is forge-hook.", "The output before the change: "+inJSON(t, oldPath), "The output now: "+inJSON(t, newPath)) {
 		t.Fatal("the run must read the source and the two paths of the event")
 	}
 	if n := len(ws.checks()); n != 0 {
